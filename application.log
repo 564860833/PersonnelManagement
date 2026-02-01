@@ -1,0 +1,337 @@
+2025-08-16 15:06:35.540905 - 日志文件创建
+2025-08-16 15:06:35,540 - Config - INFO - 应用程序配置已加载: 人员信息管理系统 v1.0
+2025-08-16 15:06:36,313 - Main - INFO - 尝试加载应用程序图标: D:\WorkApp\Pycharm\CODE\PersonnelManagement\2025.7.4\app_icon.ico
+2025-08-16 15:06:36,323 - Main - INFO - 应用程序图标已设置
+2025-08-16 15:06:36,324 - Main - INFO - 应用程序启动
+2025-08-16 15:06:36,324 - Main - INFO - 正在初始化数据库...
+2025-08-16 15:06:36,325 - Database - INFO - 成功连接到数据库: personnel_system.db
+2025-08-16 15:06:36,325 - Database - INFO - 表 base_info 创建/验证成功
+2025-08-16 15:06:36,325 - Database - INFO - 表 system_config 创建/验证成功
+2025-08-16 15:06:36,325 - Database - INFO - 表 rewards 创建/验证成功
+2025-08-16 15:06:36,326 - Database - INFO - 表 family 创建/验证成功
+2025-08-16 15:06:36,326 - Database - INFO - 表 resume 创建/验证成功
+2025-08-16 15:06:36,326 - Database - INFO - 表 users 创建/验证成功
+2025-08-16 15:06:36,326 - Database - INFO - 表 user_permissions 创建/验证成功
+2025-08-16 15:06:36,326 - Main - INFO - 数据库初始化成功
+2025-08-16 15:06:44,822 - Main - INFO - 用户 admin 登录成功
+2025-08-16 15:06:44,822 - Main - INFO - 管理员账号 admin 获得所有权限
+2025-08-16 15:06:44,822 - MainWindow - INFO - 管理员账号 admin 获得所有权限
+2025-08-16 15:06:44,832 - QueryTab - INFO - 查询标签页已初始化
+2025-08-16 15:06:44,832 - QueryTab - INFO - 用户权限: base_info=True, rewards=True, family=True, resume=True
+2025-08-16 15:06:44,865 - MainWindow - INFO - 用户权限状态:
+2025-08-16 15:06:44,865 - MainWindow - INFO - base_info: True
+2025-08-16 15:06:44,865 - MainWindow - INFO - rewards: True
+2025-08-16 15:06:44,865 - MainWindow - INFO - family: True
+2025-08-16 15:06:44,865 - MainWindow - INFO - resume: True
+2025-08-16 15:06:44,865 - MainWindow - INFO - 主窗口已创建，当前用户: admin
+2025-08-16 15:06:44,865 - MainWindow - INFO - 用户权限: base_info=True, rewards=True, family=True, resume=True
+2025-08-16 15:06:53,877 - Database - INFO - 搜索完成，找到 102 条基础信息记录
+2025-08-16 15:06:55,151 - MainWindow - INFO - 用户 admin 退出系统
+2025-08-16 15:06:55,151 - Database - INFO - 数据库连接已关闭
+2025-08-16 15:06:58,710 - Config - INFO - 应用程序配置已加载: 人员信息管理系统 v1.0
+2025-08-16 15:06:59,452 - Main - INFO - 尝试加载应用程序图标: D:\WorkApp\Pycharm\CODE\PersonnelManagement\2025.7.4\app_icon.ico
+2025-08-16 15:06:59,461 - Main - INFO - 应用程序图标已设置
+2025-08-16 15:06:59,462 - Main - INFO - 应用程序启动
+2025-08-16 15:06:59,462 - Main - INFO - 正在初始化数据库...
+2025-08-16 15:06:59,463 - Database - INFO - 成功连接到数据库: personnel_system.db
+2025-08-16 15:06:59,463 - Database - INFO - 表 base_info 创建/验证成功
+2025-08-16 15:06:59,463 - Database - INFO - 表 system_config 创建/验证成功
+2025-08-16 15:06:59,464 - Database - INFO - 表 rewards 创建/验证成功
+2025-08-16 15:06:59,464 - Database - INFO - 表 family 创建/验证成功
+2025-08-16 15:06:59,464 - Database - INFO - 表 resume 创建/验证成功
+2025-08-16 15:06:59,464 - Database - INFO - 表 users 创建/验证成功
+2025-08-16 15:06:59,464 - Database - INFO - 表 user_permissions 创建/验证成功
+2025-08-16 15:06:59,464 - Main - INFO - 数据库初始化成功
+2025-08-16 15:07:05,036 - Main - INFO - 用户 564860 登录成功
+2025-08-16 15:07:05,041 - QueryTab - INFO - 查询标签页已初始化
+2025-08-16 15:07:05,041 - QueryTab - INFO - 用户权限: base_info=True, rewards=False, family=True, resume=False
+2025-08-16 15:07:05,072 - MainWindow - INFO - 用户权限状态:
+2025-08-16 15:07:05,072 - MainWindow - INFO - base_info: True
+2025-08-16 15:07:05,072 - MainWindow - INFO - rewards: False
+2025-08-16 15:07:05,072 - MainWindow - INFO - family: True
+2025-08-16 15:07:05,072 - MainWindow - INFO - resume: False
+2025-08-16 15:07:05,072 - MainWindow - INFO - 主窗口已创建，当前用户: 564860
+2025-08-16 15:07:05,072 - MainWindow - INFO - 用户权限: base_info=True, rewards=False, family=True, resume=False
+2025-08-16 15:07:08,447 - MainWindow - INFO - 用户 564860 退出系统
+2025-08-16 15:07:08,447 - Database - INFO - 数据库连接已关闭
+2025-08-29 10:45:51,586 - Config - INFO - 应用程序配置已加载: 人员信息管理系统 v1.0
+2025-08-29 10:45:51,587 - Config - ERROR - 缺少必要的依赖包: pandas, openpyxl
+2025-08-29 10:45:51,587 - Config - CRITICAL - 缺少必要的依赖包，应用程序可能无法正常运行！
+2025-08-29 10:46:33,686 - Config - INFO - 应用程序配置已加载: 人员信息管理系统 v1.0
+2025-08-29 10:46:33,687 - Config - ERROR - 缺少必要的依赖包: pandas, openpyxl
+2025-08-29 10:46:33,687 - Config - CRITICAL - 缺少必要的依赖包，应用程序可能无法正常运行！
+2025-08-29 10:47:22,080 - Config - INFO - 应用程序配置已加载: 人员信息管理系统 v1.0
+2025-08-29 10:47:22,081 - Config - ERROR - 缺少必要的依赖包: pandas, openpyxl
+2025-08-29 10:47:22,081 - Config - CRITICAL - 缺少必要的依赖包，应用程序可能无法正常运行！
+2025-08-29 10:48:07,813 - Config - INFO - 应用程序配置已加载: 人员信息管理系统 v1.0
+2025-08-29 10:48:07,813 - Config - ERROR - 缺少必要的依赖包: pandas, openpyxl
+2025-08-29 10:48:07,813 - Config - CRITICAL - 缺少必要的依赖包，应用程序可能无法正常运行！
+2025-08-29 10:56:06,029 - Config - INFO - 应用程序配置已加载: 人员信息管理系统 v1.0
+2025-08-29 10:56:06,029 - Config - ERROR - 缺少必要的依赖包: pandas, openpyxl
+2025-08-29 10:56:06,029 - Config - CRITICAL - 缺少必要的依赖包，应用程序可能无法正常运行！
+2025-08-29 10:57:45,309 - Config - INFO - 应用程序配置已加载: 人员信息管理系统 v1.0
+2025-08-29 10:59:10,505 - Config - INFO - 应用程序配置已加载: 人员信息管理系统 v1.0
+2025-08-29 10:59:34,729 - Config - INFO - 应用程序配置已加载: 人员信息管理系统 v1.0
+2025-08-29 10:59:35,328 - Main - INFO - 尝试加载应用程序图标: D:\WorkApp\Pycharm\CODE\PersonnelManagement\2025.7.4\app_icon.ico
+2025-08-29 10:59:35,344 - Main - INFO - 应用程序图标已设置
+2025-08-29 10:59:35,346 - Main - INFO - 应用程序启动
+2025-08-29 10:59:35,346 - Main - INFO - 正在初始化数据库...
+2025-08-29 10:59:35,347 - Database - INFO - 成功连接到数据库: personnel_system.db
+2025-08-29 10:59:35,348 - Database - INFO - 表 base_info 创建/验证成功
+2025-08-29 10:59:35,348 - Database - INFO - 表 system_config 创建/验证成功
+2025-08-29 10:59:35,348 - Database - INFO - 表 rewards 创建/验证成功
+2025-08-29 10:59:35,349 - Database - INFO - 表 family 创建/验证成功
+2025-08-29 10:59:35,349 - Database - INFO - 表 resume 创建/验证成功
+2025-08-29 10:59:35,349 - Database - INFO - 表 users 创建/验证成功
+2025-08-29 10:59:35,349 - Database - INFO - 表 user_permissions 创建/验证成功
+2025-08-29 10:59:35,349 - Main - INFO - 数据库初始化成功
+2025-08-29 10:59:44,254 - Main - INFO - 用户 admin 登录成功
+2025-08-29 10:59:44,254 - Main - INFO - 管理员账号 admin 获得所有权限
+2025-08-29 10:59:44,254 - MainWindow - INFO - 管理员账号 admin 获得所有权限
+2025-08-29 10:59:44,268 - QueryTab - INFO - 查询标签页已初始化
+2025-08-29 10:59:44,268 - QueryTab - INFO - 用户权限: base_info=True, rewards=True, family=True, resume=True
+2025-08-29 10:59:44,300 - MainWindow - INFO - 用户权限状态:
+2025-08-29 10:59:44,300 - MainWindow - INFO - base_info: True
+2025-08-29 10:59:44,300 - MainWindow - INFO - rewards: True
+2025-08-29 10:59:44,300 - MainWindow - INFO - family: True
+2025-08-29 10:59:44,300 - MainWindow - INFO - resume: True
+2025-08-29 10:59:44,300 - MainWindow - INFO - 主窗口已创建，当前用户: admin
+2025-08-29 10:59:44,300 - MainWindow - INFO - 用户权限: base_info=True, rewards=True, family=True, resume=True
+2025-08-29 10:59:49,482 - Database - INFO - 搜索完成，找到 102 条基础信息记录
+2025-08-29 10:59:54,535 - MainWindow - INFO - 用户 admin 退出系统
+2025-08-29 10:59:54,539 - Database - INFO - 数据库连接已关闭
+2025-08-29 12:46:58,961 - Config - INFO - 应用程序配置已加载: 人员信息管理系统 v1.0
+2025-08-29 12:46:59,687 - Main - INFO - 尝试加载应用程序图标: D:\WorkApp\Pycharm\CODE\PersonnelManagement\2025.7.4\app_icon.ico
+2025-08-29 12:46:59,701 - Main - INFO - 应用程序图标已设置
+2025-08-29 12:46:59,703 - Main - INFO - 应用程序启动
+2025-08-29 12:46:59,703 - Main - INFO - 正在初始化数据库...
+2025-08-29 12:46:59,707 - Database - INFO - 成功连接到数据库: personnel_system.db
+2025-08-29 12:46:59,710 - Database - INFO - 表 base_info 创建/验证成功
+2025-08-29 12:46:59,710 - Database - INFO - 表 system_config 创建/验证成功
+2025-08-29 12:46:59,710 - Database - INFO - 表 rewards 创建/验证成功
+2025-08-29 12:46:59,710 - Database - INFO - 表 family 创建/验证成功
+2025-08-29 12:46:59,710 - Database - INFO - 表 resume 创建/验证成功
+2025-08-29 12:46:59,710 - Database - INFO - 表 users 创建/验证成功
+2025-08-29 12:46:59,711 - Database - INFO - 表 user_permissions 创建/验证成功
+2025-08-29 12:46:59,711 - Main - INFO - 数据库初始化成功
+2025-08-29 12:47:06,086 - Main - INFO - 用户 admin 登录成功
+2025-08-29 12:47:06,090 - Main - INFO - 管理员账号 admin 获得所有权限
+2025-08-29 12:47:06,091 - MainWindow - INFO - 管理员账号 admin 获得所有权限
+2025-08-29 12:47:06,099 - QueryTab - INFO - 查询标签页已初始化
+2025-08-29 12:47:06,099 - QueryTab - INFO - 用户权限: base_info=True, rewards=True, family=True, resume=True
+2025-08-29 12:47:06,129 - MainWindow - INFO - 用户权限状态:
+2025-08-29 12:47:06,129 - MainWindow - INFO - base_info: True
+2025-08-29 12:47:06,129 - MainWindow - INFO - rewards: True
+2025-08-29 12:47:06,130 - MainWindow - INFO - family: True
+2025-08-29 12:47:06,130 - MainWindow - INFO - resume: True
+2025-08-29 12:47:06,130 - MainWindow - INFO - 主窗口已创建，当前用户: admin
+2025-08-29 12:47:06,130 - MainWindow - INFO - 用户权限: base_info=True, rewards=True, family=True, resume=True
+2025-08-29 12:47:07,797 - Database - INFO - 搜索完成，找到 102 条基础信息记录
+2025-08-29 12:47:11,433 - Database - INFO - 搜索完成，找到 102 条基础信息记录
+2025-08-29 12:47:21,800 - MainWindow - INFO - 用户 admin 退出系统
+2025-08-29 12:47:21,805 - Database - INFO - 数据库连接已关闭
+2025-08-29 12:47:52,376 - Config - INFO - 应用程序配置已加载: 人员信息管理系统 v1.0
+2025-08-29 12:47:53,016 - Main - INFO - 尝试加载应用程序图标: D:\WorkApp\Pycharm\CODE\PersonnelManagement\2025.7.4\app_icon.ico
+2025-08-29 12:47:53,022 - Main - INFO - 应用程序图标已设置
+2025-08-29 12:47:53,023 - Main - INFO - 应用程序启动
+2025-08-29 12:47:53,023 - Main - INFO - 正在初始化数据库...
+2025-08-29 12:47:53,023 - Database - INFO - 成功连接到数据库: personnel_system.db
+2025-08-29 12:47:53,023 - Database - INFO - 表 base_info 创建/验证成功
+2025-08-29 12:47:53,025 - Database - INFO - 表 system_config 创建/验证成功
+2025-08-29 12:47:53,025 - Database - INFO - 表 rewards 创建/验证成功
+2025-08-29 12:47:53,025 - Database - INFO - 表 family 创建/验证成功
+2025-08-29 12:47:53,025 - Database - INFO - 表 resume 创建/验证成功
+2025-08-29 12:47:53,025 - Database - INFO - 表 users 创建/验证成功
+2025-08-29 12:47:53,025 - Database - INFO - 表 user_permissions 创建/验证成功
+2025-08-29 12:47:53,025 - Main - INFO - 数据库初始化成功
+2025-08-29 12:47:57,574 - Main - INFO - 用户 admin 登录成功
+2025-08-29 12:47:57,575 - Main - INFO - 管理员账号 admin 获得所有权限
+2025-08-29 12:47:57,575 - MainWindow - INFO - 管理员账号 admin 获得所有权限
+2025-08-29 12:47:57,580 - QueryTab - INFO - 查询标签页已初始化
+2025-08-29 12:47:57,580 - QueryTab - INFO - 用户权限: base_info=True, rewards=True, family=True, resume=True
+2025-08-29 12:47:57,613 - MainWindow - INFO - 用户权限状态:
+2025-08-29 12:47:57,613 - MainWindow - INFO - base_info: True
+2025-08-29 12:47:57,613 - MainWindow - INFO - rewards: True
+2025-08-29 12:47:57,613 - MainWindow - INFO - family: True
+2025-08-29 12:47:57,613 - MainWindow - INFO - resume: True
+2025-08-29 12:47:57,613 - MainWindow - INFO - 主窗口已创建，当前用户: admin
+2025-08-29 12:47:57,613 - MainWindow - INFO - 用户权限: base_info=True, rewards=True, family=True, resume=True
+2025-08-29 12:47:59,734 - MainWindow - INFO - 尝试导入表: base_info
+2025-08-29 12:47:59,734 - MainWindow - INFO - 当前用户权限: {'base_info': True, 'rewards': True, 'family': True, 'resume': True}
+2025-08-29 12:48:16,681 - MainWindow - INFO - 用户 admin 退出系统
+2025-08-29 12:48:16,681 - Database - INFO - 数据库连接已关闭
+2025-09-17 17:48:10,333 - Config - INFO - 应用程序配置已加载: 人员信息管理系统 v1.0
+2025-09-17 17:48:12,518 - Main - INFO - 尝试加载应用程序图标: D:\WorkApp\Pycharm\CODE\PersonnelManagement\2025.7.4\app_icon.ico
+2025-09-17 17:48:12,540 - Main - INFO - 应用程序图标已设置
+2025-09-17 17:48:12,542 - Main - INFO - 应用程序启动
+2025-09-17 17:48:12,542 - Main - INFO - 正在初始化数据库...
+2025-09-17 17:48:12,544 - Database - INFO - 成功连接到数据库: personnel_system.db
+2025-09-17 17:48:12,548 - Database - INFO - 表 base_info 创建/验证成功
+2025-09-17 17:48:12,548 - Database - INFO - 表 system_config 创建/验证成功
+2025-09-17 17:48:12,548 - Database - INFO - 表 rewards 创建/验证成功
+2025-09-17 17:48:12,548 - Database - INFO - 表 family 创建/验证成功
+2025-09-17 17:48:12,548 - Database - INFO - 表 resume 创建/验证成功
+2025-09-17 17:48:12,548 - Database - INFO - 表 users 创建/验证成功
+2025-09-17 17:48:12,548 - Database - INFO - 表 user_permissions 创建/验证成功
+2025-09-17 17:48:12,549 - Main - INFO - 数据库初始化成功
+2025-09-17 17:48:20,204 - Main - INFO - 用户 admin 登录成功
+2025-09-17 17:48:20,205 - Main - INFO - 管理员账号 admin 获得所有权限
+2025-09-17 17:48:20,206 - MainWindow - INFO - 管理员账号 admin 获得所有权限
+2025-09-17 17:48:20,223 - QueryTab - INFO - 查询标签页已初始化
+2025-09-17 17:48:20,223 - QueryTab - INFO - 用户权限: base_info=True, rewards=True, family=True, resume=True
+2025-09-17 17:48:20,253 - MainWindow - INFO - 用户权限状态:
+2025-09-17 17:48:20,253 - MainWindow - INFO - base_info: True
+2025-09-17 17:48:20,253 - MainWindow - INFO - rewards: True
+2025-09-17 17:48:20,253 - MainWindow - INFO - family: True
+2025-09-17 17:48:20,253 - MainWindow - INFO - resume: True
+2025-09-17 17:48:20,253 - MainWindow - INFO - 主窗口已创建，当前用户: admin
+2025-09-17 17:48:20,253 - MainWindow - INFO - 用户权限: base_info=True, rewards=True, family=True, resume=True
+2025-09-17 17:48:32,239 - MainWindow - INFO - 用户 admin 退出系统
+2025-09-17 17:48:32,240 - Database - INFO - 数据库连接已关闭
+2025-10-24 19:19:33,829 - Config - INFO - 应用程序配置已加载: 人员信息管理系统 v1.0
+2025-10-24 19:19:34,606 - Main - INFO - 尝试加载应用程序图标: D:\WorkApp\Pycharm\CODE\PersonnelManagement\2025.7.4\app_icon.ico
+2025-10-24 19:19:34,620 - Main - INFO - 应用程序图标已设置
+2025-10-24 19:19:34,621 - Main - INFO - 应用程序启动
+2025-10-24 19:19:34,621 - Main - INFO - 正在初始化数据库...
+2025-10-24 19:19:34,622 - Database - INFO - 成功连接到数据库: personnel_system.db
+2025-10-24 19:19:34,622 - Database - INFO - 表 base_info 创建/验证成功
+2025-10-24 19:19:34,622 - Database - INFO - 表 system_config 创建/验证成功
+2025-10-24 19:19:34,622 - Database - INFO - 表 rewards 创建/验证成功
+2025-10-24 19:19:34,622 - Database - INFO - 表 family 创建/验证成功
+2025-10-24 19:19:34,622 - Database - INFO - 表 resume 创建/验证成功
+2025-10-24 19:19:34,624 - Database - INFO - 表 users 创建/验证成功
+2025-10-24 19:19:34,624 - Database - INFO - 表 user_permissions 创建/验证成功
+2025-10-24 19:19:34,624 - Main - INFO - 数据库初始化成功
+2025-10-24 19:19:43,986 - Main - INFO - 用户 admin 登录成功
+2025-10-24 19:19:43,986 - Main - INFO - 管理员账号 admin 获得所有权限
+2025-10-24 19:19:43,986 - MainWindow - INFO - 管理员账号 admin 获得所有权限
+2025-10-24 19:19:43,996 - QueryTab - INFO - 查询标签页已初始化
+2025-10-24 19:19:43,996 - QueryTab - INFO - 用户权限: base_info=True, rewards=True, family=True, resume=True
+2025-10-24 19:19:44,021 - MainWindow - INFO - 用户权限状态:
+2025-10-24 19:19:44,021 - MainWindow - INFO - base_info: True
+2025-10-24 19:19:44,021 - MainWindow - INFO - rewards: True
+2025-10-24 19:19:44,021 - MainWindow - INFO - family: True
+2025-10-24 19:19:44,021 - MainWindow - INFO - resume: True
+2025-10-24 19:19:44,021 - MainWindow - INFO - 主窗口已创建，当前用户: admin
+2025-10-24 19:19:44,021 - MainWindow - INFO - 用户权限: base_info=True, rewards=True, family=True, resume=True
+2025-10-24 19:19:55,346 - Database - INFO - 搜索完成，找到 102 条基础信息记录
+2025-10-24 19:20:22,874 - MainWindow - INFO - 用户 admin 退出系统
+2025-10-24 19:20:22,875 - Database - INFO - 数据库连接已关闭
+2026-01-16 11:04:36,727 - Config - INFO - 应用程序配置已加载: 人员信息管理系统 v1.0
+2026-01-16 11:04:39,273 - Main - INFO - 尝试加载应用程序图标: D:\WorkApp\Pycharm\CODE\PersonnelManagement\2025.7.4\app_icon.ico
+2026-01-16 11:04:39,302 - Main - INFO - 应用程序图标已设置
+2026-01-16 11:04:39,305 - Main - INFO - 应用程序启动
+2026-01-16 11:04:39,305 - Main - INFO - 正在初始化数据库...
+2026-01-16 11:04:39,307 - Database - INFO - 成功连接到数据库: personnel_system.db
+2026-01-16 11:04:39,311 - Database - INFO - 表 base_info 创建/验证成功
+2026-01-16 11:04:39,311 - Database - INFO - 表 system_config 创建/验证成功
+2026-01-16 11:04:39,312 - Database - INFO - 表 rewards 创建/验证成功
+2026-01-16 11:04:39,312 - Database - INFO - 表 family 创建/验证成功
+2026-01-16 11:04:39,312 - Database - INFO - 表 resume 创建/验证成功
+2026-01-16 11:04:39,312 - Database - INFO - 表 users 创建/验证成功
+2026-01-16 11:04:39,313 - Database - INFO - 表 user_permissions 创建/验证成功
+2026-01-16 11:04:39,313 - Main - INFO - 数据库初始化成功
+2026-01-16 11:04:46,249 - Main - INFO - 用户 admin 登录成功
+2026-01-16 11:04:46,249 - Main - INFO - 管理员账号 admin 获得所有权限
+2026-01-16 11:04:46,250 - MainWindow - INFO - 管理员账号 admin 获得所有权限
+2026-01-16 11:04:46,266 - QueryTab - INFO - 查询标签页已初始化
+2026-01-16 11:04:46,267 - QueryTab - INFO - 用户权限: base_info=True, rewards=True, family=True, resume=True
+2026-01-16 11:04:46,293 - MainWindow - INFO - 用户权限状态:
+2026-01-16 11:04:46,293 - MainWindow - INFO - base_info: True
+2026-01-16 11:04:46,294 - MainWindow - INFO - rewards: True
+2026-01-16 11:04:46,294 - MainWindow - INFO - family: True
+2026-01-16 11:04:46,294 - MainWindow - INFO - resume: True
+2026-01-16 11:04:46,294 - MainWindow - INFO - 主窗口已创建，当前用户: admin
+2026-01-16 11:04:46,294 - MainWindow - INFO - 用户权限: base_info=True, rewards=True, family=True, resume=True
+2026-01-16 11:05:45,720 - Database - INFO - 搜索完成，找到 102 条基础信息记录
+2026-01-16 11:05:55,642 - MainWindow - INFO - 用户 admin 退出系统
+2026-01-16 11:05:55,647 - Database - INFO - 数据库连接已关闭
+2026-02-01 12:44:20,708 - Config - INFO - 应用程序配置已加载: 人员信息管理系统 v1.0
+2026-02-01 12:44:23,078 - Main - INFO - 尝试加载应用程序图标: D:\WorkApp\Pycharm\CODE\PersonnelManagement\2025.7.4\app_icon.ico
+2026-02-01 12:44:23,101 - Main - INFO - 应用程序图标已设置
+2026-02-01 12:44:23,103 - Main - INFO - 应用程序启动
+2026-02-01 12:44:23,103 - Main - INFO - 正在初始化数据库...
+2026-02-01 12:44:23,106 - Database - INFO - 成功连接到数据库: personnel_system.db
+2026-02-01 12:44:23,108 - Database - INFO - 表 base_info 创建/验证成功
+2026-02-01 12:44:23,109 - Database - INFO - 表 system_config 创建/验证成功
+2026-02-01 12:44:23,109 - Database - INFO - 表 rewards 创建/验证成功
+2026-02-01 12:44:23,109 - Database - INFO - 表 family 创建/验证成功
+2026-02-01 12:44:23,109 - Database - INFO - 表 resume 创建/验证成功
+2026-02-01 12:44:23,109 - Database - INFO - 表 users 创建/验证成功
+2026-02-01 12:44:23,109 - Database - INFO - 表 user_permissions 创建/验证成功
+2026-02-01 12:44:23,109 - Main - INFO - 数据库初始化成功
+2026-02-01 12:44:33,240 - Main - INFO - 用户 admin 登录成功
+2026-02-01 12:44:33,240 - Main - INFO - 管理员账号 admin 获得所有权限
+2026-02-01 12:44:33,241 - MainWindow - INFO - 管理员账号 admin 获得所有权限
+2026-02-01 12:44:33,261 - QueryTab - INFO - 查询标签页已初始化
+2026-02-01 12:44:33,261 - QueryTab - INFO - 用户权限: base_info=True, rewards=True, family=True, resume=True
+2026-02-01 12:44:33,282 - MainWindow - INFO - 用户权限状态:
+2026-02-01 12:44:33,282 - MainWindow - INFO - base_info: True
+2026-02-01 12:44:33,282 - MainWindow - INFO - rewards: True
+2026-02-01 12:44:33,282 - MainWindow - INFO - family: True
+2026-02-01 12:44:33,283 - MainWindow - INFO - resume: True
+2026-02-01 12:44:33,283 - MainWindow - INFO - 主窗口已创建，当前用户: admin
+2026-02-01 12:44:33,283 - MainWindow - INFO - 用户权限: base_info=True, rewards=True, family=True, resume=True
+2026-02-01 12:44:47,838 - Database - INFO - 搜索完成，找到 102 条基础信息记录
+2026-02-01 12:44:49,734 - Database - INFO - 搜索完成，找到 102 条基础信息记录
+2026-02-01 12:44:59,278 - MainWindow - INFO - 用户 admin 退出系统
+2026-02-01 12:44:59,283 - Database - INFO - 数据库连接已关闭
+2026-02-01 12:54:01,232 - Config - INFO - 应用程序配置已加载: 人员信息管理系统 v1.0
+2026-02-01 12:54:01,823 - Main - INFO - 尝试加载应用程序图标: D:\WorkApp\Pycharm\CODE\PersonnelManagement\2025.7.4\app_icon.ico
+2026-02-01 12:54:01,828 - Main - INFO - 应用程序图标已设置
+2026-02-01 12:54:01,829 - Main - INFO - 应用程序启动
+2026-02-01 12:54:01,829 - Main - INFO - 正在初始化数据库...
+2026-02-01 12:54:01,830 - Database - INFO - 成功连接到数据库: personnel_system.db
+2026-02-01 12:54:01,830 - Database - INFO - 表 base_info 创建/验证成功
+2026-02-01 12:54:01,830 - Database - INFO - 表 system_config 创建/验证成功
+2026-02-01 12:54:01,830 - Database - INFO - 表 rewards 创建/验证成功
+2026-02-01 12:54:01,830 - Database - INFO - 表 family 创建/验证成功
+2026-02-01 12:54:01,831 - Database - INFO - 表 resume 创建/验证成功
+2026-02-01 12:54:01,831 - Database - INFO - 表 users 创建/验证成功
+2026-02-01 12:54:01,831 - Database - INFO - 表 user_permissions 创建/验证成功
+2026-02-01 12:54:01,831 - Main - INFO - 数据库初始化成功
+2026-02-01 12:54:07,144 - Main - INFO - 用户 admin 登录成功
+2026-02-01 12:54:07,145 - Main - INFO - 管理员账号 admin 获得所有权限
+2026-02-01 12:54:07,145 - MainWindow - INFO - 管理员账号 admin 获得所有权限
+2026-02-01 12:54:07,152 - QueryTab - INFO - 查询标签页已初始化
+2026-02-01 12:54:07,152 - QueryTab - INFO - 用户权限: base_info=True, rewards=True, family=True, resume=True
+2026-02-01 12:54:07,178 - MainWindow - INFO - 用户权限状态:
+2026-02-01 12:54:07,179 - MainWindow - INFO - base_info: True
+2026-02-01 12:54:07,179 - MainWindow - INFO - rewards: True
+2026-02-01 12:54:07,179 - MainWindow - INFO - family: True
+2026-02-01 12:54:07,179 - MainWindow - INFO - resume: True
+2026-02-01 12:54:07,179 - MainWindow - INFO - 主窗口已创建，当前用户: admin
+2026-02-01 12:54:07,179 - MainWindow - INFO - 用户权限: base_info=True, rewards=True, family=True, resume=True
+2026-02-01 12:54:09,055 - Database - INFO - 搜索完成，找到 102 条基础信息记录
+2026-02-01 12:54:37,160 - MainWindow - INFO - 用户 admin 退出系统
+2026-02-01 12:54:37,160 - Database - INFO - 数据库连接已关闭
+2026-02-01 13:12:28,255 - Config - INFO - 应用程序配置已加载: 人员信息管理系统 v1.0
+2026-02-01 13:12:29,055 - Main - INFO - 尝试加载应用程序图标: D:\WorkApp\Pycharm\CODE\PersonnelManagement\2025.7.4 - ai测试\app_icon.ico
+2026-02-01 13:12:29,079 - Main - INFO - 应用程序图标已设置
+2026-02-01 13:12:29,081 - Main - INFO - 应用程序启动
+2026-02-01 13:12:29,081 - Main - INFO - 正在初始化数据库...
+2026-02-01 13:12:29,084 - Database - INFO - 成功连接到数据库: personnel_system.db
+2026-02-01 13:12:29,087 - Database - INFO - 表 base_info 创建/验证成功
+2026-02-01 13:12:29,087 - Database - INFO - 表 system_config 创建/验证成功
+2026-02-01 13:12:29,087 - Database - INFO - 表 rewards 创建/验证成功
+2026-02-01 13:12:29,087 - Database - INFO - 表 family 创建/验证成功
+2026-02-01 13:12:29,087 - Database - INFO - 表 resume 创建/验证成功
+2026-02-01 13:12:29,088 - Database - INFO - 表 users 创建/验证成功
+2026-02-01 13:12:29,088 - Database - INFO - 表 user_permissions 创建/验证成功
+2026-02-01 13:12:29,088 - Main - INFO - 数据库初始化成功
+2026-02-01 13:12:34,220 - Main - INFO - 用户 admin 登录成功
+2026-02-01 13:12:34,220 - Main - INFO - 管理员账号 admin 获得所有权限
+2026-02-01 13:12:34,222 - MainWindow - INFO - 管理员账号 admin 获得所有权限
+2026-02-01 13:12:34,245 - QueryTab - INFO - 查询标签页已初始化
+2026-02-01 13:12:34,247 - QueryTab - INFO - 用户权限: base_info=True, rewards=True, family=True, resume=True
+2026-02-01 13:12:34,269 - MainWindow - INFO - 用户权限状态:
+2026-02-01 13:12:34,269 - MainWindow - INFO - base_info: True
+2026-02-01 13:12:34,269 - MainWindow - INFO - rewards: True
+2026-02-01 13:12:34,269 - MainWindow - INFO - family: True
+2026-02-01 13:12:34,269 - MainWindow - INFO - resume: True
+2026-02-01 13:12:34,269 - MainWindow - INFO - 主窗口已创建，当前用户: admin
+2026-02-01 13:12:34,269 - MainWindow - INFO - 用户权限: base_info=True, rewards=True, family=True, resume=True
+2026-02-01 13:12:36,375 - Database - INFO - 搜索完成，找到 102 条基础信息记录
+2026-02-01 13:12:38,795 - Database - INFO - 搜索完成，找到 102 条基础信息记录
+2026-02-01 13:13:40,452 - MainWindow - INFO - 用户 admin 退出系统
+2026-02-01 13:13:40,456 - Database - INFO - 数据库连接已关闭
