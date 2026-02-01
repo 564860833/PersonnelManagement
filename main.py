@@ -21,35 +21,6 @@ def fix_windows7_compatibility():
             # 2. 设置兼容的导入模式
             os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 
-            # 3. 特殊处理pyexpat模块 - 新增代码
-            print("应用pyexpat兼容性修复...")
-            try:
-                # 创建虚拟的pyexpat模块
-                class DummyExpat:
-                    def __getattr__(self, name):
-                        return lambda *args, **kwargs: None
-
-                sys.modules['pyexpat'] = DummyExpat()
-                print("✓ pyexpat虚拟模块已创建")
-            except Exception as e:
-                print(f"pyexpat兼容性修复失败: {e}")
-def fix_windows7_compatibility():
-    """Windows 7 兼容性修复"""
-    if sys.platform == "win32":
-        # 检测 Windows 版本
-        win_version = sys.getwindowsversion()
-
-        # Windows 7 是版本 6.1
-        if win_version.major == 6 and win_version.minor == 1:
-            print("检测到 Windows 7 系统，应用兼容性修复...")
-
-            # 1. 强制禁用多进程
-            os.environ["MULTIPROCESSING_FORCE"] = "0"
-            os.environ["DISABLE_MULTIPROCESSING"] = "1"
-
-            # 2. 设置兼容的导入模式
-            os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
-
             # 3. 禁用问题模块的预加载
             problem_modules = [
                 '_socket', 'socket', 'multiprocessing',
