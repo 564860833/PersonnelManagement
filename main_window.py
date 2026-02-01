@@ -20,45 +20,6 @@ logger = logging.getLogger('MainWindow')
 
 
 class MainWindow(QMainWindow):
-    def resource_path(relative_path):
-        """
-        获取资源绝对路径 - 兼容PyInstaller打包模式和开发模式
-        专门处理Windows 7 32位系统的路径问题
-
-        参数:
-            relative_path: 资源的相对路径
-
-        返回:
-            资源的绝对路径
-        """
-        try:
-            # 1. PyInstaller创建临时文件夹时会设置_MEIPASS属性
-            base_path = sys._MEIPASS
-        except AttributeError:
-            # 2. 非PyInstaller环境: 使用当前脚本所在目录
-            base_path = os.path.abspath(".")
-
-        # 3. Windows 7兼容处理: 修复短路径问题
-        full_path = os.path.join(base_path, relative_path)
-
-        # 4. 日志记录用于调试
-        logging.debug(f"资源查找: 相对路径='{relative_path}', 完整路径='{full_path}'")
-
-        # 5. 路径标准化处理 (Windows 7关键!)
-        normalized_path = os.path.normpath(full_path)
-
-        # 6. 检查文件是否存在 (开发环境调试)
-        if not os.path.exists(normalized_path):
-            logging.warning(f"资源文件不存在: {normalized_path}")
-
-            # 尝试回退方案: 在程序目录查找
-            fallback_path = os.path.join(os.getcwd(), relative_path)
-            if os.path.exists(fallback_path):
-                logging.info(f"使用回退路径: {fallback_path}")
-                return fallback_path
-
-        return normalized_path
-
     def __init__(self, db, username, permissions):
         super().__init__()
         self.db = db
@@ -77,8 +38,6 @@ class MainWindow(QMainWindow):
         # 添加 is_admin 属性
         self.is_admin = self.db.is_admin(username)
 
-        # 确保存在默认用户
-        self.ensure_default_user()
 
         # 管理员自动拥有所有权限
         if self.is_admin:
@@ -94,16 +53,6 @@ class MainWindow(QMainWindow):
         logger.info(f"主窗口已创建，当前用户: {self.username}")
         logger.info(
             f"用户权限: base_info={self.permissions['base_info']}, rewards={self.permissions['rewards']}, family={self.permissions['family']}, resume={self.permissions['resume']}")
-
-    def ensure_default_user(self):
-        """如果 users 表中没有 admin，自动插入默认账号"""
-        try:
-            stored = self.db.get_password('admin')
-            if stored is None:
-                self.db.change_password('admin', '111111')
-                logger.info("默认用户 admin 已创建，初始密码 111111")
-        except Exception as e:
-            logger.error(f"创建默认用户失败: {e}")
 
     def init_ui(self):
         """初始化用户界面"""
@@ -317,7 +266,7 @@ class MainWindow(QMainWindow):
         """打开日志查看器"""
         try:
             log_viewer = LogViewer(config.LOG_FILE)
-            log_viewer.show()
+            log_viewer.exec_()  # 修改这里：由 show() 改为 exec_()
         except Exception as e:
             logger.error(f"打开日志查看器失败: {e}")
             QMessageBox.critical(self, "错误", f"无法打开日志文件: {e}")
@@ -339,11 +288,6 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 logger.error(f"清空日志文件失败: {e}")
                 QMessageBox.critical(self, "错误", f"清空日志文件失败: {e}")
-
-    def on_view_log(self):
-        """打开日志查看器"""
-        viewer = LogViewer(config.LOG_FILE)
-        viewer.exec_()
 
 
     def import_data(self, table_name: str):
