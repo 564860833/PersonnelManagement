@@ -1,6 +1,8 @@
 from datetime import datetime
 import re
 import logging
+import json
+from ai_chat import AIChatDialog
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
@@ -319,10 +321,33 @@ class QueryTab(QWidget):
         """)
         self.view_all_btn.clicked.connect(self.view_all_data)
 
+        # ======== 【新增】AI 分析按钮开始 ========
+        self.ai_btn = QPushButton("AI 智能分析")
+        self.ai_btn.setFixedWidth(120)  # 稍微宽一点
+        # 给它一个特别的颜色（比如紫色或橙色），显眼一点
+        self.ai_btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: #9C27B0; 
+                        color: white;
+                        font-weight: bold;
+                        border-radius: 4px;
+                        padding: 6px;
+                    }
+                    QPushButton:hover {
+                        background-color: #7B1FA2;
+                    }
+                """)
+        # 绑定点击事件 (open_ai_chat 方法需要你在后面定义)
+        self.ai_btn.clicked.connect(self.open_ai_chat)
+        # ======== 【新增】AI 分析按钮结束 ========
+
         button_layout.addStretch()
         button_layout.addWidget(self.query_btn)
         button_layout.addWidget(self.clear_btn)
         button_layout.addWidget(self.view_all_btn)
+        # ======== 【新增】把 AI 按钮加进布局 ========
+        button_layout.addWidget(self.ai_btn)
+        # ==========================================
         button_layout.addStretch()
 
         # 按钮行跨所有列（从第0列到第5列）
@@ -542,6 +567,32 @@ class QueryTab(QWidget):
         except Exception as e:
             logger.error(f"查询执行失败: {e}")
             QMessageBox.critical(self, "查询错误", f"执行查询时发生错误: {e}")
+
+    # 在 execute_query 方法的末尾，或者新添加的方法中
+    def open_ai_chat(self):
+        # 1. 获取当前查询结果
+        if not self.current_results:
+            QMessageBox.warning(self, "提示", "请先查询数据，再使用AI分析。")
+            return
+
+        # 2. 数据清洗与压缩 (Token很贵，不能把无关字段全塞进去)
+        # 仅提取关键字段用于对话
+        simplified_data = []
+        for person in self.current_results:  # 限制数量，防止爆内存，比如取前20条
+            simplified_data.append({
+                "姓名": person.get("name"),
+                "职务": person.get("current_position"),
+                "学历": person.get("fulltime_education"),
+                "出生年月": person.get("birth_date")
+                # ...根据需要添加字段
+            })
+
+        # 限制数据量，防止超过模型上下文窗口 (例如 Qwen1.8B 通常支持 4k 或 8k)
+        data_str = json.dumps(simplified_data[:50], ensure_ascii=False)
+
+        # 3. 打开对话框
+        dlg = AIChatDialog(data_str, self)
+        dlg.exec_()
 
     def show_table_data(self, table_name: str):
         """显示指定表的数据"""
