@@ -117,6 +117,7 @@ class QueryTab(QWidget):
         super().__init__()
         self.db = db
         self.permissions = permissions
+        self.ai_dialog = None  # 【新增】初始化 AI 对话框引用
         self.current_results = []  # 保存当前基础信息查询结果
         self.current_results_dict = {}  # 保存完整查询结果
         # 职位名称映射表（简洁名称 → 完整名称列表）
@@ -577,7 +578,7 @@ class QueryTab(QWidget):
                 QMessageBox.warning(self, "提示", "请先查询数据，再使用AI分析。")
                 return
 
-            # 2. 安全的数据清洗 (防止 NoneType 或不可序列化对象导致崩溃)
+            # 2. 安全的数据清洗
             simplified_data = []
             # 只取前 30 条，防止 Token 溢出
             for person in self.current_results[:30]:
@@ -590,9 +591,9 @@ class QueryTab(QWidget):
                     }
                     simplified_data.append(item)
                 except Exception:
-                    continue  # 跳过有问题的数据行
+                    continue
 
-            # 3. JSON 序列化 (这是最容易闪退的地方)
+            # 3. JSON 序列化
             data_str = json.dumps(simplified_data, ensure_ascii=False)
 
             # 4. 检查 AI 模块是否能正常导入
@@ -602,12 +603,18 @@ class QueryTab(QWidget):
                 QMessageBox.critical(self, "组件缺失", f"无法加载 AI 对话模块：\n{e}")
                 return
 
-            # 5. 打开对话框
-            dlg = AIChatDialog(data_str, self)
-            dlg.exec_()
+            # 5. 打开对话框 (关键修改点)
+            # 如果之前已经打开了窗口，先关闭旧的
+            if hasattr(self, 'ai_dialog') and self.ai_dialog is not None:
+                self.ai_dialog.close()
+
+            # 实例化并保存到 self.ai_dialog，防止被垃圾回收
+            self.ai_dialog = AIChatDialog(data_str, self)
+
+            # 使用 show() 代替 exec_()，实现非模态（不阻塞主窗口）
+            self.ai_dialog.show()
 
         except Exception as e:
-            # 捕获所有未知错误，防止闪退
             import traceback
             error_msg = traceback.format_exc()
             logger.error(f"AI 功能启动失败: {error_msg}")
