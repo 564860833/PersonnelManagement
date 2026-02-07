@@ -1,7 +1,20 @@
 import sys
 import os
 import logging
+import PyQt5
 
+#获得 PyQt5 的安装路径
+pyqt5_dirname = os.path.dirname(PyQt5.__file__)
+
+# 尝试构建插件路径 (根据 PyQt5 版本不同，路径可能在 Qt/plugins 或 Qt5/plugins)
+plugin_path = os.path.join(pyqt5_dirname, 'Qt5', 'plugins')
+if not os.path.exists(plugin_path):
+    plugin_path = os.path.join(pyqt5_dirname, 'Qt', 'plugins')
+
+# 设置环境变量，告诉 Qt 插件在哪里
+os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = plugin_path
+
+print(f"Qt 插件路径已设置为: {plugin_path}")
 
 # ============ Windows 7 兼容性修复 - 必须在所有其他导入之前 ============
 def fix_windows7_compatibility():
