@@ -120,6 +120,8 @@ class QueryTab(QWidget):
         self.ai_dialog = None  # 【新增】初始化 AI 对话框引用
         self.current_results = []  # 保存当前基础信息查询结果
         self.current_results_dict = {}  # 保存完整查询结果
+        # 【新增】记录当前显示的表格名称，默认为基本信息
+        self.current_table_name = 'base_info'
         # 职位名称映射表（简洁名称 → 完整名称列表）
         self.position_mapping = {
             "副厅": ["检察长"],
@@ -456,6 +458,9 @@ class QueryTab(QWidget):
             self.current_results_dict = results_dict
             self.current_results = results_dict.get('base_info', [])
 
+            # 【新增】重置当前表名为 base_info
+            self.current_table_name = 'base_info'
+
             # 显示基础信息表
             self.setup_table_headers('base_info')
             self.display_results(self.current_results, 'base_info')
@@ -552,6 +557,9 @@ class QueryTab(QWidget):
             self.current_results_dict = results_dict
             self.current_results = results_dict.get('base_info', [])
 
+            # 【新增】重置当前表名为 base_info
+            self.current_table_name = 'base_info'
+
             # 显示基础信息表
             self.setup_table_headers('base_info')
             self.display_results(self.current_results, 'base_info')
@@ -570,55 +578,115 @@ class QueryTab(QWidget):
             QMessageBox.critical(self, "查询错误", f"执行查询时发生错误: {e}")
 
     # 在 execute_query 方法的末尾，或者新添加的方法中
-    # 找到 open_ai_chat 方法，完全替换为以下内容：
     def open_ai_chat(self):
         try:
-            # 1. 检查是否有数据
-            if not self.current_results:
-                QMessageBox.warning(self, "提示", "请先查询数据，再使用AI分析。")
+            # 1. 获取当前表格的数据
+            # 从完整结果字典中获取当前表格的数据
+            current_data = self.current_results_dict.get(self.current_table_name, [])
+
+            if not current_data:
+                QMessageBox.warning(self, "提示",
+                                    f"当前【{self.get_table_name(self.current_table_name)}】没有数据可供分析。\n请先执行查询。")
                 return
 
-            # 2. 安全的数据清洗
+            # 2. 根据不同的表格类型，清洗和格式化数据
             simplified_data = []
-            # 只取前 30 条，防止 Token 溢出
-            for person in self.current_results[:30]:
+            # 限制数据量，防止 token 溢出 (取前 50 条)
+            limit_data = current_data[:50]
+
+            for person in limit_data:
                 try:
-                    item = {
-                        "姓名": str(person.get("name", "未知")),
-                        "职务": str(person.get("current_position", "无")),
-                        "学历": str(person.get("fulltime_education", "")),
-                        "出生": str(person.get("birth_date", ""))
-                    }
-                    simplified_data.append(item)
+                    item = {}
+                    # --- 情况 A: 人员基本信息 ---
+                    if self.current_table_name == 'base_info':
+                        item = {
+                            "姓名": str(person.get("name", "")),
+                            "职务": str(person.get("current_position", "")),
+                            "职级": str(person.get("current_grade", "")),
+                            "学历": str(person.get("fulltime_education", "")),
+                            "年龄/出生": str(person.get("birth_date", ""))
+                        }
+
+                    # --- 情况 B: 人员奖惩信息 ---
+                    elif self.current_table_name == 'rewards':
+                        # 过滤掉既没奖励也没惩罚的空记录
+                        reward = person.get("reward_name")
+                        punish = person.get("punishment_name")
+                        if not reward and not punish:
+                            continue
+
+                        item = {
+                            "姓名": str(person.get("name", "")),
+                            "奖励": str(reward) if reward else "无",
+                            "奖励时间": str(person.get("reward_date", "")),
+                            "惩戒": str(punish) if punish else "无",
+                            "惩戒时间": str(person.get("punishment_date", ""))
+                        }
+
+                    # --- 情况 C: 人员家庭成员信息 ---
+                    elif self.current_table_name == 'family':
+                        item = {
+                            "员工姓名": str(person.get("name", "")),
+                            "关系": str(person.get("relation", "")),
+                            "亲属姓名": str(person.get("family_name", "")),
+                            "政治面貌": str(person.get("political_status", "")),
+                            "单位及职务": f"{person.get('work_unit', '')} {person.get('position', '')}"
+                        }
+
+                    # --- 情况 D: 人员简历信息 ---
+                    elif self.current_table_name == 'resume':
+                        resume_text = str(person.get("resume_text", ""))
+                        # 简历太长，截取前 100 字，避免 AI 处理不过来
+                        if len(resume_text) > 100:
+                            resume_text = resume_text[:100] + "..."
+
+                        item = {
+                            "姓名": str(person.get("name", "")),
+                            "简历片段": resume_text
+                        }
+
+                    if item:
+                        simplified_data.append(item)
+
                 except Exception:
                     continue
 
-            # 3. JSON 序列化
-            data_str = json.dumps(simplified_data, ensure_ascii=False)
+            if not simplified_data:
+                QMessageBox.warning(self, "提示", "有效数据为空，无法进行分析。")
+                return
 
-            # 4. 检查 AI 模块是否能正常导入
+            # 3. JSON 序列化
+            # 添加表名作为上下文，让 AI 知道自己在分析什么数据
+            context_wrapper = {
+                "当前分析的数据类型": self.get_table_name(self.current_table_name),
+                "数据列表": simplified_data
+            }
+            data_str = json.dumps(context_wrapper, ensure_ascii=False, indent=2)
+
+            # 4. 动态检查并导入模块
             try:
                 from ai_chat import AIChatDialog
             except ImportError as e:
                 QMessageBox.critical(self, "组件缺失", f"无法加载 AI 对话模块：\n{e}")
                 return
 
-            # 5. 打开对话框 (关键修改点)
-            # 如果之前已经打开了窗口，先关闭旧的
+            # 5. 打开非模态对话框
             if hasattr(self, 'ai_dialog') and self.ai_dialog is not None:
-                self.ai_dialog.close()
+                try:
+                    self.ai_dialog.close()
+                except Exception:
+                    pass
 
-            # 实例化并保存到 self.ai_dialog，防止被垃圾回收
             self.ai_dialog = AIChatDialog(data_str, self)
-
-            # 使用 show() 代替 exec_()，实现非模态（不阻塞主窗口）
+            # 设置窗口标题，提示当前分析的是什么表
+            self.ai_dialog.setWindowTitle(f"智能分析 - {self.get_table_name(self.current_table_name)}")
             self.ai_dialog.show()
 
         except Exception as e:
             import traceback
             error_msg = traceback.format_exc()
             logger.error(f"AI 功能启动失败: {error_msg}")
-            QMessageBox.critical(self, "错误", f"启动 AI 分析时发生错误：\n{str(e)}\n\n(详细日志已记录)")
+            QMessageBox.critical(self, "错误", f"启动 AI 分析时发生错误：\n{str(e)}")
 
     def show_table_data(self, table_name: str):
         """显示指定表的数据"""
@@ -626,7 +694,8 @@ class QueryTab(QWidget):
         if not self.permissions.get(table_name, False):
             QMessageBox.warning(self, "权限不足", "您没有查看此表格的权限")
             return
-
+        # 【新增】更新当前表格名称记录
+        self.current_table_name = table_name
         # 直接显示该表的所有数据
         data = self.current_results_dict.get(table_name, [])
 
