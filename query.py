@@ -581,7 +581,6 @@ class QueryTab(QWidget):
     def open_ai_chat(self):
         try:
             # 1. 获取当前表格的数据
-            # 从完整结果字典中获取当前表格的数据
             current_data = self.current_results_dict.get(self.current_table_name, [])
 
             if not current_data:
@@ -589,79 +588,66 @@ class QueryTab(QWidget):
                                     f"当前【{self.get_table_name(self.current_table_name)}】没有数据可供分析。\n请先执行查询。")
                 return
 
-            # 2. 根据不同的表格类型，清洗和格式化数据
-            simplified_data = []
-            # 限制数据量，防止 token 溢出 (取前 50 条)
+            # 2. 数据清洗与压缩 (优化点：改为 CSV 风格文本，减少 Token，提升读取速度)
+            data_lines = []
+
+            # 限制数据量 (防止 Token 溢出，CPU 推理建议限制在 20-50 条之间)
+            # 如果电脑性能较好，可以将 [:30] 改为 [:50]
             limit_data = current_data[:50]
 
-            for person in limit_data:
-                try:
-                    item = {}
-                    # --- 情况 A: 人员基本信息 ---
-                    if self.current_table_name == 'base_info':
-                        item = {
-                            "姓名": str(person.get("name", "")),
-                            "职务": str(person.get("current_position", "")),
-                            "职级": str(person.get("current_grade", "")),
-                            "学历": str(person.get("fulltime_education", "")),
-                            "年龄/出生": str(person.get("birth_date", ""))
-                        }
+            # 根据不同表构建不同的紧凑文本
+            if self.current_table_name == 'base_info':
+                data_lines.append("数据格式说明：姓名|职务|职级|学历|出生年月")
+                for person in limit_data:
+                    # 使用 | 分隔，去除 None 值，压缩字符
+                    line = f"{person.get('name', '')}|{person.get('current_position', '')}|{person.get('current_grade', '')}|{person.get('fulltime_education', '')}|{person.get('birth_date', '')}"
+                    data_lines.append(line)
 
-                    # --- 情况 B: 人员奖惩信息 ---
-                    elif self.current_table_name == 'rewards':
-                        # 过滤掉既没奖励也没惩罚的空记录
-                        reward = person.get("reward_name")
-                        punish = person.get("punishment_name")
-                        if not reward and not punish:
-                            continue
+            elif self.current_table_name == 'rewards':
+                data_lines.append("数据格式说明：姓名|奖励名称|奖励时间|惩戒名称|惩戒时间")
+                for person in limit_data:
+                    # 过滤掉既无奖励也无惩戒的空记录
+                    r_name = person.get('reward_name')
+                    p_name = person.get('punishment_name')
+                    if not r_name and not p_name:
+                        continue
+                    # 简化显示，如果没有则显示'无'
+                    line = f"{person.get('name', '')}|{r_name if r_name else '无'}|{person.get('reward_date', '')}|{p_name if p_name else '无'}|{person.get('punishment_date', '')}"
+                    data_lines.append(line)
 
-                        item = {
-                            "姓名": str(person.get("name", "")),
-                            "奖励": str(reward) if reward else "无",
-                            "奖励时间": str(person.get("reward_date", "")),
-                            "惩戒": str(punish) if punish else "无",
-                            "惩戒时间": str(person.get("punishment_date", ""))
-                        }
+            elif self.current_table_name == 'family':
+                data_lines.append("数据格式说明：员工姓名|关系|亲属姓名|政治面貌|单位职务")
+                for person in limit_data:
+                    line = f"{person.get('name', '')}|{person.get('relation', '')}|{person.get('family_name', '')}|{person.get('political_status', '')}|{person.get('work_unit', '')} {person.get('position', '')}"
+                    data_lines.append(line)
 
-                    # --- 情况 C: 人员家庭成员信息 ---
-                    elif self.current_table_name == 'family':
-                        item = {
-                            "员工姓名": str(person.get("name", "")),
-                            "关系": str(person.get("relation", "")),
-                            "亲属姓名": str(person.get("family_name", "")),
-                            "政治面貌": str(person.get("political_status", "")),
-                            "单位及职务": f"{person.get('work_unit', '')} {person.get('position', '')}"
-                        }
+            elif self.current_table_name == 'resume':
+                data_lines.append("数据格式说明：姓名|简历摘要")
+                for person in limit_data:
+                    resume = str(person.get('resume_text', ''))
+                    # 简历截断，防止过长导致模型处理极慢
+                    if len(resume) > 100:
+                        resume = resume[:100] + "..."
+                    # 去除换行符，保持单行紧凑
+                    resume = resume.replace('\n', ' ').replace('\r', '')
+                    line = f"{person.get('name', '')}|{resume}"
+                    data_lines.append(line)
 
-                    # --- 情况 D: 人员简历信息 ---
-                    elif self.current_table_name == 'resume':
-                        resume_text = str(person.get("resume_text", ""))
-                        # 简历太长，截取前 100 字，避免 AI 处理不过来
-                        if len(resume_text) > 100:
-                            resume_text = resume_text[:100] + "..."
-
-                        item = {
-                            "姓名": str(person.get("name", "")),
-                            "简历片段": resume_text
-                        }
-
-                    if item:
-                        simplified_data.append(item)
-
-                except Exception:
-                    continue
-
-            if not simplified_data:
-                QMessageBox.warning(self, "提示", "有效数据为空，无法进行分析。")
+            if not data_lines:
+                QMessageBox.warning(self, "提示", "当前范围内没有有效数据，无法进行分析。")
                 return
 
-            # 3. JSON 序列化
-            # 添加表名作为上下文，让 AI 知道自己在分析什么数据
-            context_wrapper = {
-                "当前分析的数据类型": self.get_table_name(self.current_table_name),
-                "数据列表": simplified_data
-            }
-            data_str = json.dumps(context_wrapper, ensure_ascii=False, indent=2)
+            # 3. 组合最终文本
+            context_str = "\n".join(data_lines)
+
+            # 构建上下文提示词，告诉 AI 它是谁以及数据的格式
+            final_data_context = (
+                f"当前分析数据表：{self.get_table_name(self.current_table_name)}\n"
+                f"数据内容如下（已简化为文本格式）：\n"
+                f"----------------\n"
+                f"{context_str}\n"
+                f"----------------\n"
+            )
 
             # 4. 动态检查并导入模块
             try:
@@ -677,8 +663,7 @@ class QueryTab(QWidget):
                 except Exception:
                     pass
 
-            self.ai_dialog = AIChatDialog(data_str, self)
-            # 设置窗口标题，提示当前分析的是什么表
+            self.ai_dialog = AIChatDialog(final_data_context, self)
             self.ai_dialog.setWindowTitle(f"智能分析 - {self.get_table_name(self.current_table_name)}")
             self.ai_dialog.show()
 
