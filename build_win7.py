@@ -76,7 +76,7 @@ EXCLUDED_MODULES = [
 ]
 
 HIDDEN_IMPORTS = [
-    'PyQt5.sip', 'sqlite3', 'pandas', 'openpyxl', 'xlrd', 'logging.handlers'
+    'PyQt5.sip', 'sqlite3', 'pandas', 'openpyxl', 'xlrd', 'logging.handlers', 'llama_cpp'
 ]
 
 a = Analysis(
