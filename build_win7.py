@@ -1,8 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Windows 7 完全兼容的 PyInstaller 构建脚本
-解决多进程和 DLL 加载问题的完整方案
+Windows 7 兼容构建脚本 (最终修正版)
+修复:
+1. 解除对 concurrent.futures 的误封杀，允许 AI 使用线程池
+2. 伪造 cpu_count()，防止 AI 查询核心数时报错
+3. 强制收集 llama_cpp 所有依赖
 """
 
 import os
@@ -17,46 +20,80 @@ def setup_directories():
     directories = ['hooks', 'build', 'dist']
     for directory in directories:
         Path(directory).mkdir(exist_ok=True)
-    print("✓ 目录结构已创建")
 
 
 def create_custom_hook():
-    """创建自定义运行时钩子"""
-    hook_content = '''# pyi_rth_disable_multiprocessing.py
+    """创建智能兼容钩子"""
+    hook_content = '''# pyi_rth_win7_ai_fix.py
 import sys
 import os
 
-class FakeMultiprocessingModule:
-    def __getattr__(self, name):
-        def dummy_function(*args, **kwargs):
-            raise NotImplementedError("多进程功能已禁用以提高 Windows 7 兼容性")
-        return dummy_function
+# 1. 定义一个"智能"的伪造多进程模块
+# 它允许查询 CPU 数量 (cpu_count)，允许获取当前进程名
+# 但会拦截真正危险的创建新进程操作 (Pool, Process)
+class SmartFakeMultiprocessing:
+    def __init__(self):
+        # 拦截危险操作
+        self.Process = self._fail
+        self.Pool = self._fail
+        self.Queue = self._fail
+        self.Pipe = self._fail
+        self.Manager = self._fail
+        self.context = self
 
-# 替换问题模块
-fake_mp = FakeMultiprocessingModule()
-problematic_modules = [
-    'multiprocessing', 'multiprocessing.context', 'multiprocessing.spawn',
-    'multiprocessing.forkserver', 'multiprocessing.reduction', '_multiprocessing',
-    'concurrent.futures', 'concurrent.futures.process'
+    def _fail(self, *args, **kwargs):
+        raise NotImplementedError("Win7兼容模式：已禁用多进程生成 (AI应使用多线程)")
+
+    # 【关键修复】允许 AI 读取 CPU 核心数
+    def cpu_count(self):
+        try:
+            return os.cpu_count() or 4
+        except:
+            return 4
+
+    # 【关键修复】允许获取当前进程信息（防止日志库报错）
+    def current_process(self):
+        class Proc:
+            name = 'MainProcess'
+            daemon = False
+            pid = os.getpid()
+            _identity = ()
+        return Proc()
+
+    def active_children(self):
+        return []
+
+    # 允许访问锁（concurrent.futures 需要用到锁）
+    def __getattr__(self, name):
+        if name in ['Lock', 'RLock', 'Event', 'Condition', 'Semaphore', 'BoundedSemaphore']:
+             import threading
+             if hasattr(threading, name):
+                 return getattr(threading, name)
+        return self._fail
+
+# 2. 注入到 sys.modules，欺骗 Python 以为多进程模块存在
+fake_mp = SmartFakeMultiprocessing()
+modules_to_patch = [
+    'multiprocessing', 
+    'multiprocessing.context', 
+    'multiprocessing.process', 
+    'multiprocessing.queues', 
+    'multiprocessing.pool', 
+    'multiprocessing.reduction', 
+    '_multiprocessing'
 ]
 
-for module_name in problematic_modules:
-    sys.modules[module_name] = fake_mp
+for m in modules_to_patch:
+    sys.modules[m] = fake_mp
 
-# 禁用多进程环境变量
-os.environ.update({
-    'DISABLE_MULTIPROCESSING': '1',
-    'MULTIPROCESSING_FORCE': '0',
-    'PYTHONDONTWRITEBYTECODE': '1'
-})
-
-print("✓ Windows 7 兼容性钩子已加载")
+# 3. 注意：我们不再禁用 concurrent.futures，因为它负责管理线程池
+print("✓ Windows 7 AI 线程池兼容补丁已加载")
 '''
 
-    hook_file = Path('hooks/pyi_rth_disable_multiprocessing.py')
+    hook_file = Path('hooks/pyi_rth_win7_ai_fix.py')
     with open(hook_file, 'w', encoding='utf-8') as f:
         f.write(hook_content)
-    print(f"✓ 自定义钩子已创建: {hook_file}")
+    print(f"✓ 兼容钩子已创建: {hook_file}")
     return str(hook_file)
 
 
@@ -65,28 +102,36 @@ def create_spec_file():
     spec_content = '''# -*- mode: python ; coding: utf-8 -*-
 import sys
 import os
+from PyInstaller.utils.hooks import collect_all
 
 block_cipher = None
 
-# 完全排除多进程模块
+# 1. 强制收集 llama_cpp 的所有文件（DLLs, libs, data）
+llama_datas, llama_binaries, llama_hiddenimports = collect_all('llama_cpp')
+
+# 2. 仅排除危险的多进程模块，保留 concurrent.futures (线程池)
 EXCLUDED_MODULES = [
     'multiprocessing', 'multiprocessing.spawn', 'multiprocessing.forkserver',
-    'multiprocessing.context', 'multiprocessing.reduction', '_multiprocessing',
-    'concurrent.futures', 'asyncio'
+    '_multiprocessing', 'asyncio'
+    # 注意：这里删除了 concurrent.futures，因为 AI 需要它
 ]
 
-HIDDEN_IMPORTS = [
-    'PyQt5.sip', 'sqlite3', 'pandas', 'openpyxl', 'xlrd', 'logging.handlers', 'llama_cpp'
+# 3. 补充隐藏导入
+BASE_HIDDEN_IMPORTS = [
+    'PyQt5.sip', 'sqlite3', 'pandas', 'openpyxl', 'xlrd', 'logging.handlers',
+    'secrets', 'random', 'hmac', 'hashlib', 'concurrent.futures'
 ]
+
+FINAL_HIDDEN_IMPORTS = BASE_HIDDEN_IMPORTS + llama_hiddenimports
 
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=[],
-    datas=[('app_icon.ico', '.')], 
-    hiddenimports=HIDDEN_IMPORTS,
+    binaries=llama_binaries,
+    datas=[('app_icon.ico', '.')] + llama_datas,
+    hiddenimports=FINAL_HIDDEN_IMPORTS,
     hookspath=['hooks'],
-    runtime_hooks=['hooks/pyi_rth_disable_multiprocessing.py'],
+    runtime_hooks=['hooks/pyi_rth_win7_ai_fix.py'], # 使用新的钩子
     excludes=EXCLUDED_MODULES,
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
@@ -94,7 +139,7 @@ a = Analysis(
     noarchive=False,
 )
 
-# 过滤多进程模块
+# 过滤掉不需要的模块
 filtered_pure = [(name, path, typecode) for name, path, typecode in a.pure 
                  if not any(name.startswith(excluded) for excluded in EXCLUDED_MODULES)]
 a.pure = filtered_pure
@@ -109,8 +154,8 @@ exe = EXE(
     strip=False,
     upx=False,
     runtime_tmpdir=None,
-    console=False,
-    disable_windowed_traceback=True,
+    console=False, # 发布版隐藏黑框
+    disable_windowed_traceback=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
@@ -121,168 +166,39 @@ exe = EXE(
     spec_file = Path('win7_compatible.spec')
     with open(spec_file, 'w', encoding='utf-8') as f:
         f.write(spec_content)
-    print(f"✓ Spec 文件已创建: {spec_file}")
+    print(f"✓ Spec 文件已更新: {spec_file}")
     return str(spec_file)
 
 
 def clean_build():
-    """清理之前的构建文件"""
-    dirs_to_clean = ['build', 'dist']
-    files_to_clean = ['*.spec']
-
-    for directory in dirs_to_clean:
-        if os.path.exists(directory):
-            shutil.rmtree(directory)
-            print(f"✓ 已清理: {directory}")
-
-    import glob
-    for pattern in files_to_clean:
-        for file in glob.glob(pattern):
-            if 'win7_compatible.spec' not in file:  # 保留我们的spec文件
-                os.remove(file)
-                print(f"✓ 已清理: {file}")
-
-
-def check_environment():
-    """检查构建环境"""
-    print("检查构建环境...")
-
-    # 检查 Python 版本
-    version = sys.version_info
-    print(f"Python 版本: {version.major}.{version.minor}.{version.micro}")
-
-    if version >= (3, 9):
-        print("⚠️  警告: Python 3.9+ 对 Windows 7 支持有限，建议使用 Python 3.8")
-
-    # 检查 PyInstaller
     try:
-        import PyInstaller
-        print(f"PyInstaller 版本: {PyInstaller.__version__}")
-        if PyInstaller.__version__.startswith('5.') or PyInstaller.__version__.startswith('6.'):
-            print("⚠️  警告: PyInstaller 5.x/6.x 对 Windows 7 支持有限，建议使用 4.10")
-    except ImportError:
-        print("❌ 未安装 PyInstaller")
-        return False
-
-    # 检查必要文件
-    if not os.path.exists('main.py'):
-        print("❌ 未找到 main.py 文件")
-        return False
-
-    print("✓ 环境检查完成")
-    return True
+        if os.path.exists('dist'): shutil.rmtree('dist')
+        if os.path.exists('build'): shutil.rmtree('build')
+    except:
+        pass
 
 
 def build_application():
-    """构建应用程序"""
-    print("\n开始构建 Windows 7 兼容版本...")
-
-    # 设置目录
+    print("\n开始构建 Windows 7 AI 兼容版...")
     setup_directories()
-
-    # 创建钩子
-    hook_file = create_custom_hook()
-
-    # 创建 spec 文件
+    create_custom_hook()
     spec_file = create_spec_file()
-
-    # 清理之前的构建
     clean_build()
 
     try:
-        # 使用 spec 文件构建
         cmd = ['pyinstaller', '--clean', '--noconfirm', spec_file]
         print(f"执行命令: {' '.join(cmd)}")
+        print("-" * 20 + " Log " + "-" * 20)
+        # 直接输出日志，避免编码报错
+        subprocess.run(cmd, check=True)
+        print("-" * 20 + " End " + "-" * 20)
 
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True, encoding='utf-8')
+        print("\n✓ 构建成功！请检查 dist 文件夹。")
+        print("💡 提示：别忘了把 models 文件夹和模型放入 dist 目录！")
 
-        print("✓ 构建成功!")
-
-        # 检查输出文件
-        exe_path = Path('dist/人员信息管理系统.exe')
-        if exe_path.exists():
-            size_mb = exe_path.stat().st_size / 1024 / 1024
-            print(f"✓ 输出文件: {exe_path} ({size_mb:.1f} MB)")
-            return True
-        else:
-            print("❌ 未找到输出文件")
-            return False
-
-    except subprocess.CalledProcessError as e:
-        print("❌ 构建失败!")
-        print("错误输出:")
-        print(e.stderr)
-        return False
     except Exception as e:
-        print(f"❌ 构建过程出错: {e}")
-        return False
-
-
-def create_test_script():
-    """创建测试脚本"""
-    test_content = '''@echo off
-chcp 65001
-echo 测试 Windows 7 兼容性程序...
-echo.
-
-if not exist "dist\\人员信息管理系统.exe" (
-    echo ❌ 未找到可执行文件
-    pause
-    exit /b 1
-)
-
-echo 启动程序...
-cd dist
-start "" "人员信息管理系统.exe"
-cd ..
-
-echo ✓ 程序已启动，请检查是否正常运行
-echo.
-echo 💡 如果程序无法运行，请确保目标 Windows 7 系统已安装:
-echo    - Visual C++ 2015-2019 运行库 (x86)
-echo    - 以管理员权限运行程序
-echo.
-pause
-'''
-
-    with open('test_win7.bat', 'w', encoding='utf-8') as f:
-        f.write(test_content)
-    print("✓ 测试脚本已创建: test_win7.bat")
-
-
-def main():
-    """主函数"""
-    print("=" * 60)
-    print("Windows 7 兼容构建工具")
-    print("解决多进程和 DLL 加载问题")
-    print("=" * 60)
-
-    # 检查环境
-    if not check_environment():
-        print("\n❌ 环境检查失败，请解决上述问题后重试")
-        return
-
-    # 构建应用
-    success = build_application()
-
-    if success:
-        # 创建测试脚本
-        create_test_script()
-
-        print("\n" + "=" * 60)
-        print("✓ 构建完成!")
-        print("=" * 60)
-        print("下一步:")
-        print("1. 运行 test_win7.bat 进行本地测试")
-        print("2. 将 dist/人员信息管理系统.exe 复制到 Windows 7 系统")
-        print("3. 在 Windows 7 上以管理员权限运行程序")
-        print("\n如果仍有问题:")
-        print("- 确保 Windows 7 已安装 VC++ 2015-2019 运行库")
-        print("- 尝试兼容模式运行")
-        print("- 检查防病毒软件是否阻止程序运行")
-    else:
-        print("\n❌ 构建失败，请检查错误信息")
+        print(f"\n❌ 构建失败: {e}")
 
 
 if __name__ == "__main__":
-    main()
+    build_application()
