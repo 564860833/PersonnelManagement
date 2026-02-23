@@ -134,10 +134,13 @@ class AIChatDialog(QDialog):
         self.thread_spin = QSpinBox()
         self.thread_spin.setRange(1, 32)
 
-        # 智能设置默认线程数：物理核心数 - 2 (保留给系统)
-        default_threads = max(1, os.cpu_count() - 2)
+        # 智能设置默认线程数：物理核心数
+        # 注：os.cpu_count() 获取的是逻辑核心数，对于支持超线程的 CPU，物理核心通常是其一半
+        logical_cores = os.cpu_count() if os.cpu_count() else 4
+        default_threads = max(1, logical_cores // 2)
+
         self.thread_spin.setValue(default_threads)
-        self.thread_spin.setToolTip("决定 AI 思考的速度。\n建议设为物理核心数减2，设太高反而会卡死电脑。")
+        self.thread_spin.setToolTip("决定 AI 思考的速度。\n默认已设为物理核心数（最佳推理性能）。")
         settings_layout.addWidget(self.thread_spin)
 
         settings_layout.addStretch()  # 弹簧，把控件顶到左边
