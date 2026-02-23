@@ -71,6 +71,73 @@ class GradeSelectionDialog(QDialog):
 
         self.setLayout(layout)
 
+class ColumnSelectionDialog(QDialog):
+    """用于选择要发送给 AI 分析的列的对话框"""
+
+    def __init__(self, columns, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("选择分析字段")
+        self.setMinimumSize(300, 450)
+        self.columns = columns
+        self.checkboxes = []
+        self.setup_ui()
+
+    def setup_ui(self):
+        layout = QVBoxLayout()
+
+        # 提示标签
+        label = QLabel("请选择需要让 AI 分析的数据列（默认全选）：")
+        label.setStyleSheet("color: #333; font-weight: bold; margin-bottom: 5px;")
+        layout.addWidget(label)
+
+        # 滚动区域 (防止列太多超出屏幕)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        scroll_layout = QVBoxLayout(content)
+
+        # 全选/全不选按钮
+        btn_layout = QHBoxLayout()
+        select_all_btn = QPushButton("全选")
+        deselect_all_btn = QPushButton("全不选")
+        select_all_btn.clicked.connect(self.select_all)
+        deselect_all_btn.clicked.connect(self.deselect_all)
+        btn_layout.addWidget(select_all_btn)
+        btn_layout.addWidget(deselect_all_btn)
+        scroll_layout.addLayout(btn_layout)
+
+        # 添加列复选框
+        for col in self.columns:
+            cb = QCheckBox(col)
+            cb.setChecked(True)  # 默认全部选中
+            self.checkboxes.append(cb)
+            scroll_layout.addWidget(cb)
+
+        scroll_layout.addStretch()  # 将复选框顶上去
+
+        scroll.setWidget(content)
+        layout.addWidget(scroll)
+
+        # 底部确定/取消按钮
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+        self.setLayout(layout)
+
+    def select_all(self):
+        for cb in self.checkboxes:
+            cb.setChecked(True)
+
+    def deselect_all(self):
+        for cb in self.checkboxes:
+            cb.setChecked(False)
+
+    def get_selected_columns(self):
+        """返回被选中的中文列名列表"""
+        return [cb.text() for cb in self.checkboxes if cb.isChecked()]
+
 
     def on_all_selected(self, state):
         """当'全部'被选中/取消时，更新所有职级选项"""
@@ -658,7 +725,7 @@ class QueryTab(QWidget):
 
     def open_ai_chat(self):
         """
-        启动 AI 分析对话框 (全列读取 + 性能优化版)
+        启动 AI 分析对话框 (增加了列选择功能 + 性能优化版)
         """
         try:
             # 1. 获取当前筛选后的数据
@@ -668,36 +735,47 @@ class QueryTab(QWidget):
                 return
 
             # 2. 获取该表的所有字段映射 (English Key -> Chinese Header)
-            # 这一步保证了读取的是“所有列”
             full_mapping = self.get_full_field_mapping(self.current_table_name)
 
             # 如果映射为空（异常情况），则直接使用数据库字段名
             if not full_mapping and current_data:
                 full_mapping = {k: k for k in current_data[0].keys()}
 
+            # ================== 【新增】弹出列选择对话框 ==================
+            # 提取所有中文表头作为选项
+            all_chinese_headers = list(full_mapping.values())
+
+            # 实例化并显示对话框
+            dialog = ColumnSelectionDialog(all_chinese_headers, self)
+            if dialog.exec_() != QDialog.Accepted:
+                return  # 用户点击了取消，直接退出
+
+            selected_headers = dialog.get_selected_columns()
+            if not selected_headers:
+                QMessageBox.warning(self, "提示", "您必须至少选择一列才能进行分析。")
+                return
+
+            # 根据用户的选择过滤 mapping：只保留勾选了的字段
+            filtered_mapping = {k: v for k, v in full_mapping.items() if v in selected_headers}
+            # ==============================================================
+
             # 3. 构建 CSV 数据 (Token 密度最大化)
             csv_lines = []
 
-            # 3.1 生成表头 (使用中文，帮助 AI 理解含义)
-            # 我们只提取数据中实际存在的列（防止数据库结构变更导致报错）
+            # 3.1 生成表头 (使用过滤后的 mapping)
             available_keys = []
             if current_data:
-                # 过滤掉不需要的系统字段（如 id），保留业务字段
                 sample_row = current_data[0]
-                for db_key in full_mapping.keys():
+                # 这里改为遍历 filtered_mapping
+                for db_key in filtered_mapping.keys():
                     if db_key in sample_row:
                         available_keys.append(db_key)
 
             # 对应的中文表头列表
-            headers = [full_mapping[k] for k in available_keys]
+            headers = [filtered_mapping[k] for k in available_keys]
             csv_lines.append(",".join(headers))
 
             # 3.2 智能数据截断与格式化
-            # 为了防止 Context Overflow，我们需要一种策略
-            # 策略：不限制列，但限制行数，或者依靠用户在 UI 中选择较大的 Context Window
-
-            # 建议：读取前 100 条数据（一般 AI 处理 100 条全列数据是极限）
-            # 如果你需要处理更多，请在 ai_chat.py 界面中把 Context 设为 16384 或更高
             limit_rows = 50
             process_data = current_data[:limit_rows]
 
@@ -709,10 +787,8 @@ class QueryTab(QWidget):
                     if val is None: val = ""
                     val = str(val).strip()
 
-                    # 【关键清洗步骤 - 性能核心】
-                    # 1. 去除换行符和多余空格：极大地减少 Token 消耗
+                    # 去除换行符和多余空格，替换英文逗号
                     val = re.sub(r'\s+', ' ', val)
-                    # 2. 替换英文逗号：防止破坏 CSV 结构
                     val = val.replace(',', '，')
 
                     row_values.append(val)
@@ -737,9 +813,7 @@ class QueryTab(QWidget):
 
             # 5. 打开窗口
             try:
-                # 重新加载模块以防热更新问题
                 import ai_chat
-                # 必须传递父窗口 self，否则可能会被垃圾回收
                 if hasattr(self, 'ai_dialog') and self.ai_dialog is not None:
                     self.ai_dialog.close()
 
