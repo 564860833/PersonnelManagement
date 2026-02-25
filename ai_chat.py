@@ -43,7 +43,9 @@ class AIWorker(QObject):
                 ],
                 "stream": True,  # 修改为 True，允许流式读取并随时中断
                 "options": {
-                    "num_ctx": self.n_ctx
+                    "num_ctx": self.n_ctx,
+                    "temperature": 0.1,  # 调低温度以减少幻觉，提高准确度
+                    "top_p": 0.9
                 }
             }
 
@@ -221,11 +223,15 @@ class AIChatDialog(QDialog):
         self.send_btn.setEnabled(False)
         self.status_label.setText(f"AI 正在思考中... (模型: {model_name})")
 
+        # 优化后的 prompt 结构
         system_prompt = (
-            "Role: HR Data Analyst.\n"
-            "Task: Answer based on the CSV data below.\n"
-            "Rules: Concise, Markdown format, No Hallucinations.\n"
-            f"Data:\n{self.data_context}"
+            "### 角色\n你是一名专业的人力资源数据分析师。\n\n"
+            "### 核心任务\n请仅根据下方提供的【CSV数据】回答用户的【提问】。如果数据中不存在相关信息，请直接回答'抱歉，根据现有数据无法回答该问题'，严禁编造信息。\n\n"
+            "### 数据内容\n"
+            f"{self.data_context}\n\n"
+            "### 输出规则\n"
+            "1. 必须使用 Markdown 表格列出多条数据。\n"
+            "2. 回复必须简洁、专业，禁止输出与数据无关的内容。\n"
         )
 
         self.worker = AIWorker(model_name, system_prompt, question, n_ctx)
@@ -236,45 +242,17 @@ class AIChatDialog(QDialog):
         self.worker_thread.start()
 
     def handle_response(self, response):
-        import re
+        # 1. 直接将原始回复作为最终结论，不再解析 <think> 标签
+        final_answer = response.strip()
 
-        # 1. 解析思考过程和最终结论
-        thought_process = ""
-        final_answer = response
-
-        # 使用正则匹配 <think>...</think> 之间的内容，re.DOTALL 允许跨行匹配
-        think_match = re.search(r'<think>(.*?)</think>', response, re.DOTALL)
-
-        if think_match:
-            thought_process = think_match.group(1).strip()
-            # 从原始回复中移除 <think> 块，剩下的就是最终结论
-            final_answer = response.replace(think_match.group(0), "").strip()
-        elif "<think>" in response:
-            # 处理极端情况：模型被截断，没有输出 </think>
-            parts = response.split("<think>")
-            if len(parts) > 1:
-                thought_process = parts[1].strip()
-                final_answer = "*(提示：由于上下文长度限制或被中断，AI 未能输出最终结论)*"
-
-        # 2. 渲染思考过程 (如果存在)
-        thought_html = ""
-        if thought_process:
-            # 思考过程的文本通常不需要完全 Markdown 化，简单换行即可，或者你可以使用简单的 markdown
-            thought_text = thought_process.replace('\n', '<br>')
-            thought_html = f"""
-            <div style="background-color: #f8f9fa; border-left: 4px solid #adb5bd; padding: 10px; margin-bottom: 15px; color: #6c757d; font-size: 13px;">
-                <b>🧠 AI 思考过程：</b><br>
-                <div style="margin-top: 5px;">{thought_text}</div>
-            </div>
-            """
-
-        # 3. 渲染最终结论 (使用 Markdown)
+        # 2. 渲染最终结论 (使用 Markdown)
         try:
-            answer_html = markdown.markdown(final_answer, extensions=['extra'])
+            # 确保安装了 markdown 库，config.py 中已列出此依赖
+            answer_html = markdown.markdown(final_answer, extensions=['extra', 'tables'])
         except:
             answer_html = final_answer.replace('\n', '<br>')
 
-        # 4. 组合最终样式
+        # 3. 组合最终样式 (去掉了 thought_html 相关部分)
         styled_html = f"""
         <style>
             p {{ margin-bottom: 8px; line-height: 1.6; }}
@@ -286,7 +264,6 @@ class AIChatDialog(QDialog):
             th {{ background-color: #f2f2f2; }}
         </style>
         <div>
-            {thought_html}
             <div>{answer_html}</div>
         </div>
         """
