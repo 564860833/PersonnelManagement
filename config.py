@@ -51,6 +51,8 @@ class Config:
         self.REQUIRED_PACKAGES = [
             'pandas',  # 用于Excel数据处理
             'openpyxl',  # 处理Excel文件（特别是合并单元格）
+            'requests',  # 【新增】用于调用本地 Ollama API
+            'markdown',  # 【新增】用于渲染 AI 返回的 Markdown 文本
         ]
 
     def get_db_path(self) -> str:
