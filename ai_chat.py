@@ -38,6 +38,7 @@ class AIWorker(QObject):
                     "num_ctx": self.n_ctx,
                     "temperature": 0.1,
                     "top_p": 0.9,
+                    "seed": 42,
                 }
             }
 
@@ -191,12 +192,12 @@ class AIChatDialog(QDialog):
         if not self.history_messages:
             system_content = (
                 "### 角色\n你是一名专业的人力资源数据分析师。\n\n"
-                "### 核心任务\n请仅根据下方提供的【CSV数据】回答用户的【提问】。如果数据中不存在相关信息，请直接回答'抱歉，根据现有数据无法回答该问题'，严禁编造信息。\n\n"
+                "### 核心任务a\n请仅根据下方提供的【CSV数据】回答用户的【提问】。如果数据中不存在相关信息，请直接回答'抱歉，根据现有数据无法回答该问题'，严禁编造信息。\n\n"
                 "### 数据内容\n"
                 f"{self.data_context}\n\n"
                 "### 输出规则\n"
                 "1. 使用 Markdown 表格列出多条数据。\n"
-                "2. 回复简洁、专业，禁止输出与数据无关的内容。\n"
+                "2. 回复简洁、专业，只需要在最后进行总结，禁止输出与数据无关的内容。\n"
         )
             self.history_messages.append({"role": "system", "content": system_content})
 
