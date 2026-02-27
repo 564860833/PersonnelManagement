@@ -805,12 +805,17 @@ class QueryTab(QWidget):
                 "parttime_education": "在职学历学位",
                 "parttime_school": "在职毕业院校及专业",
                 "rewards": "奖惩",
-                "remarks": "备注",
+                "rewards": "奖惩",
             }
-            # 动态添加年度考核字段
+
+            # 2. 动态添加年度考核字段
             assessment_years = self.db.get_assessment_years() or []
             for idx, year in enumerate(assessment_years):
                 mapping[f"assessment_{idx}"] = f"{year}年年度考核结果"
+
+            # 3. 最后再把"备注"加到字典末尾
+            mapping["remarks"] = "备注"
+
             return mapping
 
         elif table_name == 'rewards':
