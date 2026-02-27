@@ -56,14 +56,33 @@ class LocalOllamaManager:
             return False
 
     def stop(self):
-        """关闭 Ollama 服务"""
+        """关闭 Ollama 服务及其所有子进程"""
         if self.process:
-            logger.info("正在关闭内置 Ollama 服务...")
+            logger.info("正在关闭内置 Ollama 服务及其子进程...")
             try:
-                self.process.terminate()
-                self.process.wait(timeout=5)
+                if platform.system() == "Windows":
+                    # Windows：使用 taskkill 强制 (/F) 结束进程树 (/T)
+                    subprocess.call(
+                        ['taskkill', '/F', '/T', '/PID', str(self.process.pid)],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL
+                    )
+                else:
+                    # Mac/Linux 逻辑
+                    self.process.terminate()
+                    self.process.wait(timeout=5)
             except Exception as e:
-                logger.error(f"关闭 Ollama 服务发生异常: {e}")
-                self.process.kill()
+                logger.error(f"关闭 Ollama 进程树时发生异常: {e}")
             finally:
                 self.process = None
+
+        # 终极保险：万一进程树没杀干净，按名字再补一刀
+        if platform.system() == "Windows":
+            try:
+                subprocess.call(
+                    ['taskkill', '/F', '/IM', 'ollama.exe'],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+            except:
+                pass
