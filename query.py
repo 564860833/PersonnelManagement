@@ -189,6 +189,110 @@ class ColumnSelectionDialog(QDialog):
             return [check.text() for check in self.grade_checks if check.isChecked()]
 
 
+class MultiTableColumnSelectionDialog(QDialog):
+    """用于选择多个表以及各个表下具体列的 AI 分析配置对话框 (原生风格版)"""
+
+    def __init__(self, available_tables, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("选择分析数据 (支持多表综合分析)")
+        self.setMinimumSize(600, 550)
+        self.available_tables = available_tables
+        self.table_checkboxes = {}
+        self.setup_ui()
+
+    def setup_ui(self):
+        layout = QVBoxLayout()
+
+        # 原生风格的提示标签
+        label = QLabel(
+            "请选择需要让 AI 读取的数据表及对应字段：\n(提示：勾选多个表可进行跨表综合分析；取消无关字段可提高速度并节省算力)")
+        layout.addWidget(label)
+
+        # 滚动区域
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        scroll_layout = QVBoxLayout(content)
+
+        # 遍历生成每张表的配置组
+        for table_key, info in self.available_tables.items():
+            # 使用原生的 QGroupBox 并设为可勾选
+            group = QGroupBox(info['title'])
+            group.setCheckable(True)
+            group.setChecked(False)  # 默认不勾选，调用时会将当前查看的表设为 True
+
+            group_layout = QVBoxLayout()
+
+            # --- 全选/清空按钮区域 ---
+            btn_layout = QHBoxLayout()
+            select_all_btn = QPushButton("全选")
+            deselect_all_btn = QPushButton("清空")
+
+            # 设置按钮宽度小一点，显得紧凑
+            select_all_btn.setFixedWidth(100)
+            deselect_all_btn.setFixedWidth(100)
+
+            btn_layout.addWidget(select_all_btn)
+            btn_layout.addWidget(deselect_all_btn)
+            btn_layout.addStretch()  # 将按钮推向左侧
+            group_layout.addLayout(btn_layout)
+
+            # --- 字段复选框区域 ---
+            grid_layout = QGridLayout()
+            col_checkboxes = {}
+            row, col = 0, 0
+            for col_name in info['columns']:
+                cb = QCheckBox(col_name)
+                cb.setChecked(True)
+                col_checkboxes[col_name] = cb
+                grid_layout.addWidget(cb, row, col)
+                col += 1
+                if col > 3:  # 每行放 4 列字段
+                    col = 0
+                    row += 1
+
+            group_layout.addLayout(grid_layout)
+            group.setLayout(group_layout)
+            scroll_layout.addWidget(group)
+
+            # --- 按钮事件逻辑 ---
+            # 闭包捕捉变量，用于全选或反选当前表的复选框
+            def make_select_handler(cbs, state):
+                return lambda: [cb.setChecked(state) for cb in cbs.values()]
+
+            select_all_btn.clicked.connect(make_select_handler(col_checkboxes, True))
+            deselect_all_btn.clicked.connect(make_select_handler(col_checkboxes, False))
+
+            # 保存引用以便后续读取状态
+            self.table_checkboxes[table_key] = {
+                'group': group,
+                'cols': col_checkboxes
+            }
+
+        scroll_layout.addStretch()
+        scroll.setWidget(content)
+        layout.addWidget(scroll)
+
+        # 底部确定/取消按钮 (完全使用系统默认样式)
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+        self.setLayout(layout)
+
+    def get_selected_data(self):
+        """返回被选中的表和列数据字典 -> {table_key: [选中的列名]}"""
+        result = {}
+        for table_key, widgets in self.table_checkboxes.items():
+            # 只有 GroupBox 被勾选，才提取内部的列
+            if widgets['group'].isChecked():
+                selected_cols = [name for name, cb in widgets['cols'].items() if cb.isChecked()]
+                if selected_cols:
+                    result[table_key] = selected_cols
+        return result
+
+
 class QueryTab(QWidget):
     def __init__(self, db: Database, permissions: dict):
         """查询标签页初始化
@@ -747,100 +851,116 @@ class QueryTab(QWidget):
 
     def open_ai_chat(self):
         """
-        启动 AI 分析对话框 (增加了列选择功能 + 性能优化版)
+        启动 AI 分析对话框 (升级版：支持多表联合分析与精确列选择)
         """
         try:
-            # 1. 获取当前筛选后的数据
-            current_data = self.current_results_dict.get(self.current_table_name, [])
-            if not current_data:
-                QMessageBox.warning(self, "提示", f"当前【{self.get_table_name(self.current_table_name)}】没有数据。")
+            # 1. 检查是否存在任何有权限且有数据的表
+            has_data = False
+            available_tables = {}
+            table_keys = ['base_info', 'rewards', 'family', 'resume']
+
+            for t_key in table_keys:
+                # 必须拥有该表权限，且查询结果里该表有数据
+                if self.permissions.get(t_key, False) and self.current_results_dict.get(t_key):
+                    has_data = True
+                    current_table_data = self.current_results_dict[t_key]
+
+                    # 获取列映射
+                    full_mapping = self.get_full_field_mapping(t_key)
+                    if not full_mapping and current_table_data:
+                        full_mapping = {k: k for k in current_table_data[0].keys()}
+
+                    available_tables[t_key] = {
+                        'title': self.get_table_name(t_key),
+                        'mapping': full_mapping,
+                        'columns': list(full_mapping.values())
+                    }
+
+            if not has_data or not available_tables:
+                QMessageBox.warning(self, "提示", "当前查询没有数据，或您没有任何表格的查看权限。")
                 return
 
-            # 2. 获取该表的所有字段映射 (English Key -> Chinese Header)
-            full_mapping = self.get_full_field_mapping(self.current_table_name)
+            # ================== 弹出多表列选择对话框 ==================
+            dialog = MultiTableColumnSelectionDialog(available_tables, self)
 
-            # 如果映射为空（异常情况），则直接使用数据库字段名
-            if not full_mapping and current_data:
-                full_mapping = {k: k for k in current_data[0].keys()}
+            # 人性化设置：默认勾选用户当前正在查看的表
+            if self.current_table_name in dialog.table_checkboxes:
+                dialog.table_checkboxes[self.current_table_name]['group'].setChecked(True)
 
-            # ================== 【新增】弹出列选择对话框 ==================
-            # 提取所有中文表头作为选项
-            all_chinese_headers = list(full_mapping.values())
-
-            # 实例化并显示对话框
-            dialog = ColumnSelectionDialog(all_chinese_headers, self)
             if dialog.exec_() != QDialog.Accepted:
-                return  # 用户点击了取消，直接退出
+                return  # 用户点击取消
 
-            selected_headers = dialog.get_selected_columns()
-            if not selected_headers:
-                QMessageBox.warning(self, "提示", "您必须至少选择一列才能进行分析。")
+            selected_data_config = dialog.get_selected_data()
+            if not selected_data_config:
+                QMessageBox.warning(self, "提示", "您必须至少勾选一个数据表及其中一列才能进行分析。")
                 return
-
-            # 根据用户的选择过滤 mapping：只保留勾选了的字段
-            filtered_mapping = {k: v for k, v in full_mapping.items() if v in selected_headers}
             # ==============================================================
 
-            # 3. 构建 CSV 数据 (Token 密度最大化)
-            csv_lines = []
+            # 3. 提取用户选中的多表数据并构建上下文
+            final_data_contexts = []
+            limit_rows_per_table = 100  # 每个表最多传入的行数（防 token 爆仓）
 
-            # 3.1 生成表头 (使用过滤后的 mapping)
-            available_keys = []
-            if current_data:
-                sample_row = current_data[0]
-                # 这里改为遍历 filtered_mapping
-                for db_key in filtered_mapping.keys():
-                    if db_key in sample_row:
-                        available_keys.append(db_key)
+            for t_key, selected_headers in selected_data_config.items():
+                current_data = self.current_results_dict.get(t_key, [])
+                full_mapping = available_tables[t_key]['mapping']
 
-            # 对应的中文表头列表
-            headers = [filtered_mapping[k] for k in available_keys]
-            csv_lines.append(",".join(headers))
+                # 过滤 mapping：只保留用户勾选的字段
+                filtered_mapping = {k: v for k, v in full_mapping.items() if v in selected_headers}
 
-            # 3.2 智能数据截断与格式化
-            limit_rows = 100
-            process_data = current_data[:limit_rows]
+                csv_lines = []
+                available_keys = []
+                if current_data:
+                    sample_row = current_data[0]
+                    for db_key in filtered_mapping.keys():
+                        if db_key in sample_row:
+                            available_keys.append(db_key)
 
-            for person in process_data:
-                row_values = []
-                for key in available_keys:
-                    val = person.get(key)
-                    # 处理空值
-                    if val is None: val = ""
-                    val = str(val).strip()
+                # 生成本表的 CSV 表头
+                headers = [filtered_mapping[k] for k in available_keys]
+                csv_lines.append(",".join(headers))
 
-                    # 去除换行符和多余空格，替换英文逗号
-                    val = re.sub(r'\s+', ' ', val)
-                    val = val.replace(',', '，')
+                # 提取本表数据
+                process_data = current_data[:limit_rows_per_table]
+                for person in process_data:
+                    row_values = []
+                    for key in available_keys:
+                        val = person.get(key)
+                        if val is None: val = ""
+                        val = str(val).strip()
+                        # 清理换行符，防破坏 CSV 格式
+                        val = re.sub(r'\s+', ' ', val)
+                        val = val.replace(',', '，')
+                        row_values.append(val)
+                    csv_lines.append(",".join(row_values))
 
-                    row_values.append(val)
+                # 生成本表的上下文块
+                context_str = "\n".join(csv_lines)
+                total_count = len(current_data)
+                note = ""
+                if total_count > limit_rows_per_table:
+                    note = f"\n(注：此表共有 {total_count} 条记录，为保证 AI 运行速度，仅传入前 {limit_rows_per_table} 条。)"
 
-                csv_lines.append(",".join(row_values))
+                # 拼接本表数据区块
+                table_block = (
+                    f"### Data({self.get_table_name(t_key)}):\n"
+                    f"```csv\n{context_str}\n```"
+                    f"{note}"
+                )
+                final_data_contexts.append(table_block)
 
-            # 4. 组合最终文本
-            context_str = "\n".join(csv_lines)
-            row_count = len(process_data)
-            total_count = len(current_data)
+            # 4. 组合所有表的文本
+            final_data_context = "\n\n".join(final_data_contexts)
 
-            note = ""
-            if total_count > limit_rows:
-                note = f"\n(注：当前表格共 {total_count} 人，为保证 AI 运行速度，仅截取前 {limit_rows} 人进行分析。)"
-
-            # 明确告诉 AI 这是一个 CSV 数据
-            final_data_context = (
-                f"Data({self.get_table_name(self.current_table_name)}):\n"
-                f"```csv\n{context_str}\n```"
-                f"{note}"
-            )
-
-            # 5. 打开窗口
+            # 5. 打开 AI 对话窗口
             try:
                 import ai_chat
                 if hasattr(self, 'ai_dialog') and self.ai_dialog is not None:
                     self.ai_dialog.close()
 
                 self.ai_dialog = ai_chat.AIChatDialog(final_data_context, self)
-                self.ai_dialog.setWindowTitle(f"智能分析 - {self.get_table_name(self.current_table_name)}")
+                # 修改标题以反馈当前为多表综合分析
+                table_names = [self.get_table_name(k) for k in selected_data_config.keys()]
+                self.ai_dialog.setWindowTitle(f"智能分析 - 涉及 [{', '.join(table_names)}]")
                 self.ai_dialog.show()
 
             except Exception as e:
