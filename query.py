@@ -912,7 +912,6 @@ class QueryTab(QWidget):
                 # 过滤 mapping：只保留用户勾选的字段
                 filtered_mapping = {k: v for k, v in full_mapping.items() if v in selected_headers}
 
-                csv_lines = []
                 available_keys = []
                 if current_data:
                     sample_row = current_data[0]
@@ -920,26 +919,40 @@ class QueryTab(QWidget):
                         if db_key in sample_row:
                             available_keys.append(db_key)
 
-                # 生成本表的 CSV 表头
-                headers = [filtered_mapping[k] for k in available_keys]
-                csv_lines.append(",".join(headers))
+                # ==== 改用 AI 最擅长理解的 Markdown 表格格式 ====
+                markdown_lines = []
 
-                # 提取本表数据
+                # 1. 生成 Markdown 表头
+                headers = [filtered_mapping[k] for k in available_keys]
+                markdown_lines.append("| " + " | ".join(headers) + " |")
+
+                # 2. 生成 Markdown 分隔线
+                separators = ["---"] * len(headers)
+                markdown_lines.append("| " + " | ".join(separators) + " |")
+
+                # 3. 提取本表数据
                 process_data = current_data[:limit_rows_per_table]
                 for person in process_data:
                     row_values = []
                     for key in available_keys:
                         val = person.get(key)
-                        if val is None: val = ""
+                        if val is None:
+                            val = ""
                         val = str(val).strip()
-                        # 清理换行符，防破坏 CSV 格式
-                        val = re.sub(r'\s+', ' ', val)
-                        val = val.replace(',', '，')
-                        row_values.append(val)
-                    csv_lines.append(",".join(row_values))
 
-                # 生成本表的上下文块
-                context_str = "\n".join(csv_lines)
+                        # 核心清理操作：防止数据内的特殊符号破坏 Markdown 表格结构
+                        # 1. 把所有换行、回车、制表符替换为空格
+                        val = re.sub(r'[\r\n\t]+', ' ', val)
+                        # 2. 把 Markdown 表格的敏感字符 "|" 替换为全角 "｜" 或逗号
+                        val = val.replace('|', '｜')
+
+                        row_values.append(val)
+
+                    markdown_lines.append("| " + " | ".join(row_values) + " |")
+
+                # 将列表组合为字符串
+                context_str = "\n".join(markdown_lines)
+
                 total_count = len(current_data)
                 note = ""
                 if total_count > limit_rows_per_table:
@@ -948,7 +961,7 @@ class QueryTab(QWidget):
                 # 拼接本表数据区块
                 table_block = (
                     f"### Data({self.get_table_name(t_key)}):\n"
-                    f"```csv\n{context_str}\n```"
+                    f"{context_str}\n"
                     f"{note}"
                 )
                 final_data_contexts.append(table_block)
