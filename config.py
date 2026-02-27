@@ -12,7 +12,7 @@ class Config:
     def __init__(self):
         # 基本配置
         self.APP_NAME = "人员信息管理系统"
-        self.APP_VERSION = "1.0"
+        self.APP_VERSION = "2.0"
 
         # 日志格式定义
         self.LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -55,13 +55,22 @@ class Config:
             'markdown',  # 【新增】用于渲染 AI 返回的 Markdown 文本
         ]
 
+    def get_external_dir(self):
+        """【新增方法】获取程序外部的真实目录"""
+        if getattr(sys, 'frozen', False):
+            # 如果是打包后的 exe，返回 exe 所在的目录
+            return os.path.dirname(sys.executable)
+        else:
+            # 如果是源码运行，返回 config.py 所在的目录
+            return os.path.dirname(os.path.abspath(__file__))
+
     def get_db_path(self) -> str:
-        """获取数据库文件路径 - 使用相对路径"""
-        return "personnel_system.db"  # 直接放在程序目录
+        """获取数据库文件路径 - 强制固定在 exe 同级目录"""
+        return os.path.join(self.get_external_dir(), "personnel_system.db")
 
     def get_log_path(self) -> str:
-        """获取日志文件路径 - 使用相对路径"""
-        return "application.log"  # 直接放在程序目录
+        """获取日志文件路径 - 强制固定在 exe 同级目录"""
+        return os.path.join(self.get_external_dir(), "application.log")
 
     def ensure_log_file_exists(self):
         """确保日志文件存在"""
