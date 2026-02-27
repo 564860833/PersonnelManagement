@@ -1,4 +1,5 @@
 import os
+import sys
 import subprocess
 import logging
 import platform
@@ -9,16 +10,23 @@ logger = logging.getLogger('OllamaManager')
 class LocalOllamaManager:
     def __init__(self):
         self.process = None
-        # 获取当前项目根目录
-        self.base_dir = os.path.dirname(os.path.abspath(__file__))
 
-        # 定义 ollama.exe 的路径和模型存放路径
-        if platform.system() == "Windows":
-            self.exe_path = os.path.join(self.base_dir, "bin", "ollama.exe")
+        # 判断是否为 PyInstaller 打包后的环境
+        if getattr(sys, 'frozen', False):
+            # 外部路径：指向 exe 文件所在的真实同级目录
+            external_base_dir = os.path.dirname(sys.executable)
         else:
-            self.exe_path = os.path.join(self.base_dir, "bin", "ollama")  # Linux/Mac
+            # 源码运行环境
+            external_base_dir = os.path.dirname(os.path.abspath(__file__))
 
-        self.models_dir = os.path.join(self.base_dir, "models")
+        # 定义 ollama 的路径 (现在使用外部路径 external_base_dir)
+        if platform.system() == "Windows":
+            self.exe_path = os.path.join(external_base_dir, "bin", "ollama.exe")
+        else:
+            self.exe_path = os.path.join(external_base_dir, "bin", "ollama")
+
+        # 定义模型存放路径 (同样使用外部路径)
+        self.models_dir = os.path.join(external_base_dir, "models")
 
     def start(self):
         """静默启动内部打包的 Ollama 服务"""
@@ -61,16 +69,16 @@ class LocalOllamaManager:
             logger.info("正在关闭内置 Ollama 服务及其子进程...")
             try:
                 if platform.system() == "Windows":
-                    # Windows：使用 taskkill 强制 (/F) 结束进程树 (/T)
-                    subprocess.call(
+                    # 【修改点 1】：把 call 改为 Popen
+                    subprocess.Popen(
                         ['taskkill', '/F', '/T', '/PID', str(self.process.pid)],
                         stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL
+                        stderr=subprocess.DEVNULL,
+                        creationflags=subprocess.CREATE_NO_WINDOW # 避免闪黑框
                     )
                 else:
                     # Mac/Linux 逻辑
                     self.process.terminate()
-                    self.process.wait(timeout=5)
             except Exception as e:
                 logger.error(f"关闭 Ollama 进程树时发生异常: {e}")
             finally:
@@ -79,10 +87,12 @@ class LocalOllamaManager:
         # 终极保险：万一进程树没杀干净，按名字再补一刀
         if platform.system() == "Windows":
             try:
-                subprocess.call(
+                # 【修改点 2】：把 call 改为 Popen
+                subprocess.Popen(
                     ['taskkill', '/F', '/IM', 'ollama.exe'],
                     stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL
+                    stderr=subprocess.DEVNULL,
+                    creationflags=subprocess.CREATE_NO_WINDOW # 避免闪黑框
                 )
             except:
                 pass
