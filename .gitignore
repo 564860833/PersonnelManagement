@@ -1,0 +1,33 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE/editor local files
+.idea/
+.vscode/
+
+# Logs
+*.log
+application.log
+
+# Local databases and runtime data
+*.db
+personnel_system.db
+
+# Build/package outputs
+build/
+dist/
+*.exe
+
+# Large local model files
+models/*.gguf
+
+# OS files
+Thumbs.db
+Desktop.ini
