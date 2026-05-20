@@ -80,6 +80,134 @@ BUTTON_STYLES = {
 ANALYSIS_FIELD_LABEL_STYLE = "color: #333; font-weight: bold; margin-bottom: 5px;"
 COMPACT_BUTTON_STYLE = "padding: 3px;"
 
+QUERY_FORM_CONTROL_STYLE = """
+QLabel#queryFormLabel {
+    color: #333;
+    font-weight: bold;
+}
+QLineEdit, QComboBox {
+    min-height: 30px;
+    padding: 4px 8px;
+    border: 1px solid #d0d7de;
+    border-radius: 5px;
+    background-color: #ffffff;
+    color: #222;
+}
+QLineEdit:focus, QComboBox:focus {
+    border: 1px solid #74b58b;
+    background-color: #fbfffc;
+}
+QLineEdit:read-only {
+    background-color: #f9fafb;
+}
+QLineEdit#monthRangePicker {
+    color: #222;
+}
+QComboBox::drop-down {
+    border: none;
+    width: 24px;
+}
+QWidget#monthPanel {
+    background-color: #ffffff;
+    border: 1px solid #d8dee4;
+    border-radius: 6px;
+}
+QLabel#monthPanelCaption {
+    color: #57606a;
+    font-weight: bold;
+}
+QLabel#monthPanelTitle {
+    color: #24292f;
+    font-weight: bold;
+}
+QPushButton#monthYearButton {
+    min-height: 0;
+    padding: 0 8px;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    background-color: transparent;
+    color: #24292f;
+    font-weight: bold;
+}
+QPushButton#monthYearButton:hover {
+    background-color: #edf7f1;
+    border-color: #b7d9c4;
+}
+QPushButton#monthNavButton {
+    min-height: 0;
+    padding: 0;
+    border: 1px solid #d0d7de;
+    border-radius: 5px;
+    background-color: #f6f8fa;
+    color: #24292f;
+}
+QPushButton#monthNavButton:hover {
+    background-color: #edf7f1;
+    border-color: #74b58b;
+}
+QPushButton#monthNavButton:disabled {
+    background-color: #f6f8fa;
+    color: #c9d1d9;
+    border-color: #eaeef2;
+}
+QPushButton#monthCell {
+    min-height: 0;
+    padding: 0;
+    border: 1px solid #d0d7de;
+    border-radius: 5px;
+    background-color: #ffffff;
+    color: #24292f;
+}
+QPushButton#monthCell:hover {
+    background-color: #edf7f1;
+    border-color: #74b58b;
+}
+QPushButton#monthCell[state="selected"] {
+    background-color: #2f7d4f;
+    border-color: #2f7d4f;
+    color: #ffffff;
+    font-weight: bold;
+}
+QPushButton#monthCell[state="range"] {
+    background-color: #e8f4ed;
+    border-color: #b7d9c4;
+    color: #1f5f39;
+}
+QPushButton#monthCell:disabled {
+    background-color: #f6f8fa;
+    border-color: #eaeef2;
+    color: #c9d1d9;
+}
+QPushButton#yearCell {
+    min-height: 0;
+    padding: 0;
+    border: 1px solid #d0d7de;
+    border-radius: 5px;
+    background-color: #ffffff;
+    color: #24292f;
+}
+QPushButton#yearCell:hover {
+    background-color: #edf7f1;
+    border-color: #74b58b;
+}
+QPushButton#yearCell[state="selected"] {
+    background-color: #2f7d4f;
+    border-color: #2f7d4f;
+    color: #ffffff;
+    font-weight: bold;
+}
+QPushButton#yearCell[state="range"] {
+    background-color: #e8f4ed;
+    border-color: #b7d9c4;
+    color: #1f5f39;
+}
+QPushButton#yearCell:disabled {
+    background-color: #f6f8fa;
+    border-color: #eaeef2;
+    color: #c9d1d9;
+}
+"""
+
 RESULT_TABLE_STYLE = """
 QTableWidget, QTableView {
     gridline-color: #d8d8d8;

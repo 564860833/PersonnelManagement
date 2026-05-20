@@ -7,10 +7,10 @@ from PyQt5.QtWidgets import (
     QComboBox, QGroupBox,
     QMessageBox, QHeaderView, QDialog,
     QVBoxLayout, QCheckBox, QDialogButtonBox,
-    QScrollArea, QAbstractItemView, QGridLayout
+    QScrollArea, QAbstractItemView, QGridLayout, QSizePolicy
 )
-from PyQt5.QtCore import Qt, QSignalBlocker
-from PyQt5.QtGui import QFont, QIntValidator
+from PyQt5.QtCore import Qt, QSignalBlocker, pyqtSignal
+from PyQt5.QtGui import QFont
 from core.database import Database
 from metadata.constants import (
     TABLE_LABELS,
@@ -29,12 +29,417 @@ from metadata.query_options import (
 from ui.styles import (
     ANALYSIS_FIELD_LABEL_STYLE,
     COMPACT_BUTTON_STYLE,
+    QUERY_FORM_CONTROL_STYLE,
     RESULT_TABLE_STYLE,
     button_style,
 )
 from ui.table_model import ResultTableModel
 
 logger = logging.getLogger('QueryTab')
+
+
+def _month_sort_key(value: str):
+    """把 yyyy.MM 转为可比较的月份序号。"""
+    year, month = value.split(".")
+    return int(year) * 12 + int(month)
+
+
+class MonthRangeDialog(QDialog):
+    """双面板年月范围选择弹窗。"""
+
+    MIN_YEAR = 1900
+    MAX_YEAR = 2100
+
+    def __init__(self, parent=None, start=None, end=None):
+        super().__init__(parent)
+        self.setWindowTitle("选择出生年月范围")
+        self.setMinimumWidth(620)
+        self._selected_start = self.normalize_month(start)
+        self._selected_end = self.normalize_month(end)
+        if self._selected_start and self._selected_end:
+            if _month_sort_key(self._selected_start) > _month_sort_key(self._selected_end):
+                self._selected_end = None
+        self.setup_ui()
+        self.update_panels()
+
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(14)
+        layout.setContentsMargins(16, 16, 16, 16)
+
+        start_year, end_year = self.initial_panel_years()
+        panel_layout = QHBoxLayout()
+        panel_layout.setSpacing(14)
+
+        self.start_panel = MonthPanel("起始年月", start_year, self.MIN_YEAR, self.MAX_YEAR)
+        self.end_panel = MonthPanel("结束年月", end_year, self.MIN_YEAR, self.MAX_YEAR)
+        self.start_panel.monthSelected.connect(self.on_start_selected)
+        self.start_panel.yearSelected.connect(self.on_start_year_selected)
+        self.end_panel.monthSelected.connect(self.on_end_selected)
+        self.end_panel.yearSelected.connect(self.on_end_year_selected)
+        panel_layout.addWidget(self.start_panel)
+        panel_layout.addWidget(self.end_panel)
+        layout.addLayout(panel_layout)
+
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        clear_btn = button_box.addButton("清空", QDialogButtonBox.ResetRole)
+        clear_btn.clicked.connect(self.clear_and_accept)
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        self.ok_button = button_box.button(QDialogButtonBox.Ok)
+        layout.addWidget(button_box)
+
+        self.setStyleSheet(QUERY_FORM_CONTROL_STYLE)
+
+    def initial_panel_years(self):
+        start_year = self.year_part(self._selected_start)
+        end_year = self.year_part(self._selected_end)
+        if start_year and end_year:
+            return start_year, end_year
+        if start_year:
+            return start_year, min(start_year + 1, self.MAX_YEAR)
+        if end_year:
+            return max(end_year - 1, self.MIN_YEAR), end_year
+        return 1990, 1999
+
+    def selected_range(self):
+        return self._selected_start, self._selected_end
+
+    def clear_and_accept(self):
+        self._selected_start = None
+        self._selected_end = None
+        super().accept()
+
+    def on_start_selected(self, value):
+        self._selected_start = value
+        if self._selected_end and _month_sort_key(value) > _month_sort_key(self._selected_end):
+            self._selected_end = None
+        start_year = self.year_part(value)
+        if self.end_panel.year < start_year:
+            self.end_panel.set_year(start_year)
+        self.update_panels()
+
+    def on_start_year_selected(self, year):
+        self.on_start_selected(f"{year}.01")
+
+    def on_end_selected(self, value):
+        if self._selected_start and _month_sort_key(value) < _month_sort_key(self._selected_start):
+            return
+        self._selected_end = value
+        self.update_panels()
+
+    def on_end_year_selected(self, year):
+        self.on_end_selected(f"{year}.12")
+
+    def update_panels(self):
+        self.start_panel.set_selection(self._selected_start, self._selected_end)
+        self.end_panel.set_selection(
+            self._selected_start,
+            self._selected_end,
+            disabled_before=self._selected_start,
+        )
+        self.ok_button.setEnabled(bool(self._selected_start or self._selected_end))
+
+    def accept(self):
+        if not (self._selected_start or self._selected_end):
+            return
+        if (
+            self._selected_start
+            and self._selected_end
+            and _month_sort_key(self._selected_start) > _month_sort_key(self._selected_end)
+        ):
+            QMessageBox.warning(self, "年月范围错误", "起始年月不能晚于结束年月。")
+            return
+        super().accept()
+
+    def normalize_month(self, value):
+        if not value:
+            return None
+        value = str(value).replace("-", ".")
+        match = re.match(r"^\d{4}\.(0[1-9]|1[0-2])$", value)
+        return value if match else None
+
+    def year_part(self, value):
+        return int(value.split(".")[0]) if value else None
+
+
+class MonthPanel(QWidget):
+    """单侧年份月份面板。"""
+
+    YEAR_PAGE_SIZE = 12
+    monthSelected = pyqtSignal(str)
+    yearSelected = pyqtSignal(int)
+
+    def __init__(self, title, year, min_year, max_year, parent=None):
+        super().__init__(parent)
+        self.title = title
+        self.year = year
+        self.min_year = min_year
+        self.max_year = max_year
+        self.year_page_start = self.year_grid_start(year)
+        self.view_mode = "month"
+        self._start = None
+        self._end = None
+        self._disabled_before = None
+        self.month_buttons = {}
+        self.year_buttons = {}
+        self.setup_ui()
+        self.refresh()
+
+    def setup_ui(self):
+        self.setObjectName("monthPanel")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+
+        caption = QLabel(self.title)
+        caption.setObjectName("monthPanelCaption")
+        layout.addWidget(caption)
+
+        header_layout = QHBoxLayout()
+        header_layout.setSpacing(8)
+        self.prev_button = QPushButton("<")
+        self.prev_button.setObjectName("monthNavButton")
+        self.prev_button.setFixedSize(30, 28)
+        self.prev_button.clicked.connect(lambda: self.shift_page(-1))
+        self.year_button = QPushButton()
+        self.year_button.setObjectName("monthYearButton")
+        self.year_button.setCursor(Qt.PointingHandCursor)
+        self.year_button.clicked.connect(self.toggle_year_view)
+        self.next_button = QPushButton(">")
+        self.next_button.setObjectName("monthNavButton")
+        self.next_button.setFixedSize(30, 28)
+        self.next_button.clicked.connect(lambda: self.shift_page(1))
+        header_layout.addWidget(self.prev_button)
+        header_layout.addWidget(self.year_button, 1)
+        header_layout.addWidget(self.next_button)
+        layout.addLayout(header_layout)
+
+        self.month_container = QWidget()
+        month_container_layout = QVBoxLayout(self.month_container)
+        month_container_layout.setContentsMargins(0, 0, 0, 0)
+        month_grid = QGridLayout()
+        month_grid.setHorizontalSpacing(8)
+        month_grid.setVerticalSpacing(8)
+        for month in range(1, 13):
+            button = QPushButton(f"{month:02d}")
+            button.setObjectName("monthCell")
+            button.setFixedSize(54, 34)
+            button.clicked.connect(lambda _, m=month: self.monthSelected.emit(self.month_value(m)))
+            self.month_buttons[month] = button
+            month_grid.addWidget(button, (month - 1) // 3, (month - 1) % 3)
+        month_container_layout.addLayout(month_grid)
+        layout.addWidget(self.month_container)
+
+        self.year_container = QWidget()
+        year_container_layout = QVBoxLayout(self.year_container)
+        year_container_layout.setContentsMargins(0, 0, 0, 0)
+        year_grid = QGridLayout()
+        year_grid.setHorizontalSpacing(8)
+        year_grid.setVerticalSpacing(8)
+        for index in range(self.YEAR_PAGE_SIZE):
+            button = QPushButton()
+            button.setObjectName("yearCell")
+            button.setFixedSize(54, 34)
+            button.clicked.connect(lambda _, i=index: self.select_year_from_grid(i))
+            self.year_buttons[index] = button
+            year_grid.addWidget(button, index // 3, index % 3)
+        year_container_layout.addLayout(year_grid)
+        layout.addWidget(self.year_container)
+
+    def set_year(self, year):
+        self.year = max(self.min_year, min(self.max_year, year))
+        self.year_page_start = self.year_grid_start(self.year)
+        self.refresh()
+
+    def shift_page(self, delta):
+        if self.view_mode == "year":
+            self.set_year_page_start(self.year_page_start + delta * self.YEAR_PAGE_SIZE)
+            return
+        self.set_year(self.year + delta)
+
+    def toggle_year_view(self):
+        if self.view_mode == "year":
+            self.view_mode = "month"
+        else:
+            self.view_mode = "year"
+            self.year_page_start = self.year_grid_start(self.year)
+        self.refresh()
+
+    def select_year_from_grid(self, index):
+        year = self.year_page_start + index
+        if year < self.min_year or year > self.max_year:
+            return
+        self.year = year
+        self.view_mode = "month"
+        self.yearSelected.emit(year)
+        self.refresh()
+
+    def set_year_page_start(self, year):
+        max_start = self.year_grid_start(self.max_year)
+        self.year_page_start = max(self.min_year, min(max_start, year))
+        self.refresh()
+
+    def set_selection(self, start, end, disabled_before=None):
+        self._start = start
+        self._end = end
+        self._disabled_before = disabled_before
+        self.refresh()
+
+    def refresh(self):
+        self.month_container.setVisible(self.view_mode == "month")
+        self.year_container.setVisible(self.view_mode == "year")
+        if self.view_mode == "year":
+            page_end = min(self.year_page_start + self.YEAR_PAGE_SIZE - 1, self.max_year)
+            self.year_button.setText(f"{self.year_page_start} - {page_end}")
+            self.prev_button.setEnabled(self.year_page_start > self.min_year)
+            self.next_button.setEnabled(self.year_page_start + self.YEAR_PAGE_SIZE - 1 < self.max_year)
+            self.refresh_year_buttons()
+            return
+
+        self.year_button.setText(f"{self.year}")
+        self.prev_button.setEnabled(self.year > self.min_year)
+        self.next_button.setEnabled(self.year < self.max_year)
+        for month, button in self.month_buttons.items():
+            value = self.month_value(month)
+            disabled = self.is_disabled(value)
+            button.setEnabled(not disabled)
+            button.setToolTip("结束年月不能早于起始年月" if disabled else "")
+            button.setProperty("state", self.month_state(value))
+            self.refresh_style(button)
+
+    def refresh_year_buttons(self):
+        for index, button in self.year_buttons.items():
+            year = self.year_page_start + index
+            disabled = year < self.min_year or year > self.max_year or self.is_year_disabled(year)
+            button.setText(str(year))
+            button.setEnabled(not disabled)
+            button.setVisible(self.min_year <= year <= self.max_year)
+            button.setToolTip("结束年份不能早于起始年月" if disabled else "")
+            button.setProperty("state", self.year_state(year))
+            self.refresh_style(button)
+
+    def is_disabled(self, value):
+        return bool(
+            self._disabled_before
+            and _month_sort_key(value) < _month_sort_key(self._disabled_before)
+        )
+
+    def is_year_disabled(self, year):
+        return bool(
+            self._disabled_before
+            and _month_sort_key(f"{year}.12") < _month_sort_key(self._disabled_before)
+        )
+
+    def month_state(self, value):
+        if value == self._start or value == self._end:
+            return "selected"
+        if self._start and self._end:
+            value_key = _month_sort_key(value)
+            if _month_sort_key(self._start) < value_key < _month_sort_key(self._end):
+                return "range"
+        return ""
+
+    def year_state(self, year):
+        year_start = f"{year}.01"
+        year_end = f"{year}.12"
+        if self._start and self.year_from_month(self._start) == year:
+            return "selected"
+        if self._end and self.year_from_month(self._end) == year:
+            return "selected"
+        if self._start and self._end:
+            if _month_sort_key(self._start) < _month_sort_key(year_start):
+                if _month_sort_key(year_end) < _month_sort_key(self._end):
+                    return "range"
+        return ""
+
+    def month_value(self, month):
+        return f"{self.year}.{month:02d}"
+
+    def year_grid_start(self, year):
+        return max(self.min_year, year - ((year - self.min_year) % self.YEAR_PAGE_SIZE))
+
+    def year_from_month(self, value):
+        return int(value.split(".")[0])
+
+    def refresh_style(self, button):
+        button.style().unpolish(button)
+        button.style().polish(button)
+
+
+class MonthRangePicker(QLineEdit):
+    """只读的年月范围输入框，点击后弹出选择面板。"""
+
+    rangeChanged = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._start = None
+        self._end = None
+        self.setObjectName("monthRangePicker")
+        self.setReadOnly(True)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setPlaceholderText("选择出生年月范围")
+        self.setToolTip("点击选择出生年月范围")
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.open_picker()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
+            self.open_picker()
+            event.accept()
+            return
+        if event.key() in (Qt.Key_Backspace, Qt.Key_Delete):
+            self.clear()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def open_picker(self):
+        dialog = MonthRangeDialog(self, self._start, self._end)
+        if dialog.exec_() == QDialog.Accepted:
+            self.set_range(*dialog.selected_range())
+
+    def set_range(self, start, end):
+        start = self.normalize_month(start)
+        end = self.normalize_month(end)
+        if self._start == start and self._end == end:
+            return
+        self._start = start
+        self._end = end
+        self.update_display()
+        self.rangeChanged.emit()
+
+    def get_range(self):
+        return self._start, self._end
+
+    def clear(self):
+        self.set_range(None, None)
+
+    def update_display(self):
+        if self._start and self._end:
+            self.setText(f"{self.format_month(self._start)} 至 {self.format_month(self._end)}")
+        elif self._start:
+            self.setText(f"从 {self.format_month(self._start)}")
+        elif self._end:
+            self.setText(f"至 {self.format_month(self._end)}")
+        else:
+            QLineEdit.clear(self)
+
+    def normalize_month(self, value):
+        if not value:
+            return None
+        value = str(value).replace("-", ".")
+        match = re.match(r"^\d{4}\.(0[1-9]|1[0-2])$", value)
+        return value if match else None
+
+    def format_month(self, value):
+        return value.replace(".", "-")
 
 
 # 职级对话框类
@@ -220,125 +625,88 @@ class QueryTab(QWidget):
         main_layout.setSpacing(10)
         main_layout.setContentsMargins(12, 12, 12, 12)
 
-        # 查询条件组 - 使用更美观的网格布局
+        # 查询条件组 - 三列顶部标签表单
         condition_group = QGroupBox("查询条件")
+        condition_group.setStyleSheet(QUERY_FORM_CONTROL_STYLE)
         grid_layout = QGridLayout()
-        grid_layout.setHorizontalSpacing(10)
-        grid_layout.setVerticalSpacing(8)
-        grid_layout.setContentsMargins(10, 12, 10, 10)  # 增加内边距
+        grid_layout.setHorizontalSpacing(18)
+        grid_layout.setVerticalSpacing(12)
+        grid_layout.setContentsMargins(12, 16, 12, 12)
+        for column in range(3):
+            grid_layout.setColumnStretch(column, 1)
 
-        # 添加一个空列作为左侧控件和右侧控件的分隔
-        grid_layout.setColumnMinimumWidth(2, 16)  # 设置第2列为分隔列
+        def apply_field_metrics(widget):
+            widget.setMinimumHeight(34)
+            widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            return widget
 
-        # ======== 第一行：姓名 + 出生年月 ========
-        row = 0
+        def create_form_item(label_text, control):
+            container = QWidget()
+            layout = QVBoxLayout(container)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(5)
+            label = QLabel(label_text)
+            label.setObjectName("queryFormLabel")
+            layout.addWidget(label)
+            layout.addWidget(control)
+            return container
 
-        # 姓名 - 左对齐
-        grid_layout.addWidget(QLabel("姓名:"), row, 0, Qt.AlignRight)
+        def add_form_item(row, column, label_text, control):
+            grid_layout.addWidget(create_form_item(label_text, control), row, column)
+
         self.name_input = QLineEdit()
         self.name_input.setPlaceholderText("输入姓名")
-        self.name_input.setMinimumWidth(130)
-        grid_layout.addWidget(self.name_input, row, 1)  # 不再跨列
+        apply_field_metrics(self.name_input)
 
-        # 添加分隔标签
-        grid_layout.addWidget(QLabel(""), row, 2)  # 空标签作为分隔
+        self.birth_range_picker = MonthRangePicker()
+        apply_field_metrics(self.birth_range_picker)
 
-        # 出生年月标签 - 右对齐（向右移动到第3列）
-        grid_layout.addWidget(QLabel("出生年月范围:"), row, 3, Qt.AlignRight)
-
-        # 起始年月（向右移动到第4列）
-        birth_start_layout = QHBoxLayout()
-        birth_start_layout.setSpacing(4)
-        birth_start_layout.addWidget(QLabel("从"))
-        self.birth_start_year = QLineEdit()
-        self.birth_start_year.setPlaceholderText("年份")
-        self.birth_start_year.setValidator(QIntValidator(1900, 2100, self))
-        self.birth_start_year.setFixedWidth(86)
-        self.birth_start_month = QComboBox()
-        self.birth_start_month.addItem("不限")
-        self.birth_start_month.addItems([f"{month:02d}" for month in range(1, 13)])
-        self.birth_start_month.setFixedWidth(72)
-        birth_start_layout.addWidget(self.birth_start_year)
-        birth_start_layout.addWidget(QLabel("年"))
-        birth_start_layout.addWidget(self.birth_start_month)
-        birth_start_layout.addWidget(QLabel("月"))
-        grid_layout.addLayout(birth_start_layout, row, 4)
-
-        # 结束年月（向右移动到第5列）
-        birth_end_layout = QHBoxLayout()
-        birth_end_layout.setSpacing(4)
-        birth_end_layout.addWidget(QLabel("至"))
-        self.birth_end_year = QLineEdit()
-        self.birth_end_year.setPlaceholderText("年份")
-        self.birth_end_year.setValidator(QIntValidator(1900, 2100, self))
-        self.birth_end_year.setFixedWidth(86)
-        self.birth_end_month = QComboBox()
-        self.birth_end_month.addItem("不限")
-        self.birth_end_month.addItems([f"{month:02d}" for month in range(1, 13)])
-        self.birth_end_month.setFixedWidth(72)
-        birth_end_layout.addWidget(self.birth_end_year)
-        birth_end_layout.addWidget(QLabel("年"))
-        birth_end_layout.addWidget(self.birth_end_month)
-        birth_end_layout.addWidget(QLabel("月"))
-        grid_layout.addLayout(birth_end_layout, row, 5)
-
-        # ======== 第二行：现任职务 + 职级/等级 ========
-        row += 1
-
-        # 现任职务 - 左对齐
-        grid_layout.addWidget(QLabel("现任职务:"), row, 0, Qt.AlignRight)
         self.position_combo = QComboBox()
         self.position_combo.addItem("不限", "")
         for level in POSITION_LEVELS:
             self.position_combo.addItem(level, level)
-        self.position_combo.setMinimumWidth(110)
-        grid_layout.addWidget(self.position_combo, row, 1)
+        apply_field_metrics(self.position_combo)
 
-        # 分隔列
-        grid_layout.addWidget(QLabel(""), row, 2)  # 空标签作为分隔
-
-        # 职级/等级 - 右对齐（向右移动到第3列）
-        grid_layout.addWidget(QLabel("职级/等级:"), row, 3, Qt.AlignRight)
+        grade_widget = QWidget()
+        grade_layout = QHBoxLayout(grade_widget)
+        grade_layout.setContentsMargins(0, 0, 0, 0)
+        grade_layout.setSpacing(8)
         self.grade_display = QLineEdit()
         self.grade_display.setReadOnly(True)
         self.grade_display.setPlaceholderText("点击选择")
-        self.grade_display.setMinimumWidth(140)
-        grid_layout.addWidget(self.grade_display, row, 4)  # 移动到第4列
-
+        apply_field_metrics(self.grade_display)
         self.select_grades_btn = QPushButton("选择...")
-        self.select_grades_btn.setFixedWidth(80)
-        self.select_grades_btn.setStyleSheet(COMPACT_BUTTON_STYLE)
+        self.select_grades_btn.setFixedWidth(84)
+        self.select_grades_btn.setMinimumHeight(34)
+        self.select_grades_btn.setStyleSheet(button_style("secondary"))
         self.select_grades_btn.clicked.connect(self.select_grades)
-        grid_layout.addWidget(self.select_grades_btn, row, 5)  # 移动到第5列
+        grade_layout.addWidget(self.grade_display, 1)
+        grade_layout.addWidget(self.select_grades_btn)
+        grade_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
-        # ======== 第三行：学历学位 ========
-        row += 1
-
-        # 全日制学历学位 - 左对齐
-        grid_layout.addWidget(QLabel("全日制学历学位:"), row, 0, Qt.AlignRight)
         self.education_combo = QComboBox()
         self.education_combo.addItem("不限", "")
         for level in EDUCATION_LEVELS:
             self.education_combo.addItem(level, level)
-        self.education_combo.setMinimumWidth(110)
-        grid_layout.addWidget(self.education_combo, row, 1)
+        apply_field_metrics(self.education_combo)
 
-        # 分隔列
-        grid_layout.addWidget(QLabel(""), row, 2)  # 空标签作为分隔
-
-        # 在职学历学位 - 右对齐（向右移动到第3列）
-        grid_layout.addWidget(QLabel("在职学历学位:"), row, 3, Qt.AlignRight)
         self.parttime_combo = QComboBox()
         self.parttime_combo.addItem("不限", "")
         for level in EDUCATION_LEVELS:
             self.parttime_combo.addItem(level, level)
-        self.parttime_combo.setMinimumWidth(110)
-        grid_layout.addWidget(self.parttime_combo, row, 4)  # 移动到第4列
+        apply_field_metrics(self.parttime_combo)
 
-        # ======== 第四行：按钮 ========
-        row += 1
+        add_form_item(0, 0, "姓名", self.name_input)
+        add_form_item(0, 1, "出生年月范围", self.birth_range_picker)
+        add_form_item(0, 2, "现任职务", self.position_combo)
+        add_form_item(1, 0, "职级/等级", grade_widget)
+        add_form_item(1, 1, "全日制学历学位", self.education_combo)
+        add_form_item(1, 2, "在职学历学位", self.parttime_combo)
+
+        # ======== 按钮行 ========
         button_layout = QHBoxLayout()
         button_layout.setSpacing(15)
+        button_layout.setContentsMargins(0, 8, 0, 0)
 
         # 使用更美观的按钮样式
         self.query_btn = QPushButton("查询")
@@ -373,8 +741,7 @@ class QueryTab(QWidget):
         # ==========================================
         button_layout.addStretch()
 
-        # 按钮行跨所有列（从第0列到第5列）
-        grid_layout.addLayout(button_layout, row, 0, 1, 6)
+        grid_layout.addLayout(button_layout, 2, 0, 1, 3)
 
         condition_group.setLayout(grid_layout)
         main_layout.addWidget(condition_group)
@@ -448,10 +815,7 @@ class QueryTab(QWidget):
             self.name_input,
             self.grade_display,
             self.position_combo,
-            self.birth_start_year,
-            self.birth_start_month,
-            self.birth_end_year,
-            self.birth_end_month,
+            self.birth_range_picker,
             self.education_combo,
             self.parttime_combo,
         ]
@@ -459,21 +823,22 @@ class QueryTab(QWidget):
     def bind_query_state_events(self):
         """让查询条件变化时自动写入内存状态。"""
         for widget in self.query_state_widgets():
-            if isinstance(widget, QLineEdit):
+            if isinstance(widget, MonthRangePicker):
+                widget.rangeChanged.connect(self.save_query_state)
+            elif isinstance(widget, QLineEdit):
                 widget.textChanged.connect(self.save_query_state)
             elif isinstance(widget, QComboBox):
                 widget.currentIndexChanged.connect(self.save_query_state)
 
     def get_query_state(self) -> dict:
         """读取当前查询条件输入状态。"""
+        birth_start, birth_end = self.birth_range_picker.get_range()
         return {
             "name": self.name_input.text(),
             "grades": self.grade_display.text(),
             "position": self.position_combo.currentData() or "",
-            "birth_start_year": self.birth_start_year.text(),
-            "birth_start_month": self.birth_start_month.currentText(),
-            "birth_end_year": self.birth_end_year.text(),
-            "birth_end_month": self.birth_end_month.currentText(),
+            "birth_start": birth_start,
+            "birth_end": birth_end,
             "education": self.education_combo.currentData() or "",
             "parttime_education": self.parttime_combo.currentData() or "",
         }
@@ -488,10 +853,6 @@ class QueryTab(QWidget):
         index = combo.findData(value)
         combo.setCurrentIndex(index if index >= 0 else 0)
 
-    def set_combo_by_text(self, combo: QComboBox, text: str):
-        index = combo.findText(text)
-        combo.setCurrentIndex(index if index >= 0 else 0)
-
     def restore_query_state(self):
         """恢复最近一次保存的查询条件。"""
         if not self._query_state:
@@ -503,10 +864,10 @@ class QueryTab(QWidget):
             self.name_input.setText(self._query_state.get("name", ""))
             self.grade_display.setText(self._query_state.get("grades", ""))
             self.set_combo_by_data(self.position_combo, self._query_state.get("position", ""))
-            self.birth_start_year.setText(self._query_state.get("birth_start_year", ""))
-            self.set_combo_by_text(self.birth_start_month, self._query_state.get("birth_start_month", "不限"))
-            self.birth_end_year.setText(self._query_state.get("birth_end_year", ""))
-            self.set_combo_by_text(self.birth_end_month, self._query_state.get("birth_end_month", "不限"))
+            self.birth_range_picker.set_range(
+                self._query_state.get("birth_start"),
+                self._query_state.get("birth_end"),
+            )
             self.set_combo_by_data(self.education_combo, self._query_state.get("education", ""))
             self.set_combo_by_data(self.parttime_combo, self._query_state.get("parttime_education", ""))
         finally:
@@ -548,13 +909,8 @@ class QueryTab(QWidget):
         # 清空现任职务输入
         self.position_combo.setCurrentIndex(0)
 
-        # 清空年份输入框
-        self.birth_start_year.clear()
-        self.birth_end_year.clear()
-
-        # 重置月份为空值
-        self.birth_start_month.setCurrentIndex(0)  # 设置为空值
-        self.birth_end_month.setCurrentIndex(0)  # 设置为空值
+        # 清空出生年月范围
+        self.birth_range_picker.clear()
 
         # 重置学历下拉框
         self.education_combo.setCurrentIndex(0)
@@ -590,34 +946,7 @@ class QueryTab(QWidget):
 
     def get_birth_range(self):
         """获取出生年月范围条件，格式为 yyyy.MM。"""
-        birth_start = None
-        birth_end = None
-
-        start_year = self.birth_start_year.text().strip()
-        start_month = self.birth_start_month.currentText().strip()
-        if start_month == "不限":
-            start_month = None
-
-        if start_year and start_month:
-            birth_start = f"{start_year}.{start_month}"
-        elif start_year:
-            birth_start = f"{start_year}.01"
-            if not self.birth_end_year.text().strip():
-                birth_end = f"{start_year}.12"
-
-        end_year = self.birth_end_year.text().strip()
-        end_month = self.birth_end_month.currentText().strip()
-        if end_month == "不限":
-            end_month = None
-
-        if end_year and end_month:
-            birth_end = f"{end_year}.{end_month}"
-        elif end_year:
-            birth_end = f"{end_year}.12"
-            if not birth_start and not self.birth_start_year.text().strip():
-                birth_start = f"{end_year}.01"
-
-        return birth_start, birth_end
+        return self.birth_range_picker.get_range()
 
     def collect_query_conditions(self):
         """收集界面上的所有查询条件。"""
