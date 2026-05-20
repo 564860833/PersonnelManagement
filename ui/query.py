@@ -3,8 +3,8 @@ import logging
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QLineEdit, QPushButton, QTableWidget,
-    QTableWidgetItem, QComboBox, QGroupBox,
+    QLineEdit, QPushButton, QTableView,
+    QComboBox, QGroupBox,
     QMessageBox, QHeaderView, QDialog,
     QVBoxLayout, QCheckBox, QDialogButtonBox,
     QScrollArea, QAbstractItemView, QGridLayout
@@ -13,11 +13,9 @@ from PyQt5.QtCore import Qt, QSignalBlocker
 from PyQt5.QtGui import QFont, QIntValidator
 from core.database import Database
 from metadata.constants import (
-    TABLE_DATE_FIELDS,
     TABLE_LABELS,
-    get_table_field_by_header,
+    get_table_field_items,
     get_table_field_labels,
-    get_table_headers,
     get_table_label,
 )
 from metadata.query_options import (
@@ -34,6 +32,7 @@ from ui.styles import (
     RESULT_TABLE_STYLE,
     button_style,
 )
+from ui.table_model import ResultTableModel
 
 logger = logging.getLogger('QueryTab')
 
@@ -204,6 +203,9 @@ class QueryTab(QWidget):
         self.current_table_name = 'base_info'
         self._query_state = {}
         self._restoring_query_state = False
+        self.page_size = 50
+        self.current_page = 1
+        self.result_model = None
 
         self.setup_ui()
         self.bind_query_state_events()
@@ -403,16 +405,38 @@ class QueryTab(QWidget):
             button_layout.addWidget(btn)
         result_layout.addLayout(button_layout)
 
-        # 结果表 - 关键修改：禁用行选择功能
-        self.result_table = QTableWidget()
-        self.result_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        # 结果表
+        self.result_model = ResultTableModel(self)
+        self.result_table = QTableView()
+        self.result_table.setModel(self.result_model)
+        self.result_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         # 禁用排序功能，防止数据错乱
         self.result_table.setSortingEnabled(False)
-        # 禁用行选择功能 - 新增
+        # 禁用行选择功能
         self.result_table.setSelectionMode(QAbstractItemView.NoSelection)
         self.result_table.setStyleSheet(RESULT_TABLE_STYLE)
         self.result_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         result_layout.addWidget(self.result_table)
+
+        pagination_layout = QHBoxLayout()
+        self.prev_page_btn = QPushButton("上一页")
+        self.prev_page_btn.setFixedWidth(90)
+        self.prev_page_btn.setStyleSheet(COMPACT_BUTTON_STYLE)
+        self.prev_page_btn.clicked.connect(self.previous_page)
+        self.page_info_label = QLabel("第 0 / 0 页，共 0 条")
+        self.page_info_label.setAlignment(Qt.AlignCenter)
+        self.next_page_btn = QPushButton("下一页")
+        self.next_page_btn.setFixedWidth(90)
+        self.next_page_btn.setStyleSheet(COMPACT_BUTTON_STYLE)
+        self.next_page_btn.clicked.connect(self.next_page)
+
+        pagination_layout.addStretch()
+        pagination_layout.addWidget(self.prev_page_btn)
+        pagination_layout.addWidget(self.page_info_label)
+        pagination_layout.addWidget(self.next_page_btn)
+        pagination_layout.addStretch()
+        result_layout.addLayout(pagination_layout)
+        self.update_pagination_controls(0, 0)
 
         result_group.setLayout(result_layout)
         main_layout.addWidget(result_group)
@@ -622,8 +646,8 @@ class QueryTab(QWidget):
         self.current_results_dict = results_dict
         self.current_results = results_dict.get('base_info', [])
         self.current_table_name = 'base_info'
-        self.setup_table_headers('base_info')
-        self.display_results(self.current_results, 'base_info')
+        self.current_page = 1
+        self.display_current_page()
         self.update_table_buttons(len(self.current_results) > 0)
 
     def clear_results(self):
@@ -631,9 +655,9 @@ class QueryTab(QWidget):
         self.current_results_dict = {}
         self.current_results = []
         self.current_table_name = 'base_info'
-        self.result_table.clear()
-        self.result_table.setRowCount(0)
-        self.result_table.setColumnCount(0)
+        self.current_page = 1
+        self.result_model.clear()
+        self.update_pagination_controls(0, 0)
         self.update_table_buttons(False)
 
         if self.ai_dialog is not None:
@@ -792,119 +816,97 @@ class QueryTab(QWidget):
         if not self.permissions.get(table_name, False):
             QMessageBox.warning(self, "权限不足", "您没有查看此表格的权限")
             return
-        # 【新增】更新当前表格名称记录
+
         self.current_table_name = table_name
-        # 直接显示该表的所有数据
-        data = self.current_results_dict.get(table_name, [])
-
-        # 如果没有数据，显示空表格
-        if not data:
-            self.result_table.setRowCount(0)
-            self.result_table.setColumnCount(0)
-            return
-
-        # 设置表头
-        self.setup_table_headers(table_name)
-
-        # 显示数据
-        self.display_results(data, table_name)
+        self.current_page = 1
+        self.display_current_page()
 
     def get_table_name(self, table_name: str) -> str:
         """获取表的中文名称"""
         return get_table_label(table_name)
 
-
-    def setup_table_headers(self, table_name: str):
-        """根据表名设置表头"""
+    def get_table_columns(self, table_name: str):
+        """获取当前表的字段和表头。"""
         assessment_years = self.db.get_assessment_years() or []
-        headers = get_table_headers(table_name, assessment_years)
-        self.result_table.setColumnCount(len(headers))
-        self.result_table.setHorizontalHeaderLabels(headers)
+        items = get_table_field_items(table_name, assessment_years)
+        fields = [field_name for field_name, _ in items]
+        headers = [label for _, label in items]
+        return fields, headers
 
+    def apply_table_view_layout(self, table_name: str):
+        """按表类型设置列宽和换行策略。"""
+        header = self.result_table.horizontalHeader()
         if table_name != 'resume':
-            self.result_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+            self.result_table.setWordWrap(True)
+            self.result_table.setTextElideMode(Qt.ElideNone)
+            header.setSectionResizeMode(QHeaderView.ResizeToContents)
             return
 
-        # 关键修改：设置各列的宽度调整策略
-        # 序号列 - 根据内容调整
-        self.result_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.result_table.setWordWrap(True)
+        self.result_table.setTextElideMode(Qt.ElideNone)
+        if self.result_model.columnCount() >= 1:
+            header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        if self.result_model.columnCount() >= 2:
+            header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+            header.setMinimumSectionSize(80)
+        if self.result_model.columnCount() >= 3:
+            header.setSectionResizeMode(2, QHeaderView.Stretch)
 
-        # 姓名列 - 根据内容调整，但设置最小宽度
-        self.result_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.result_table.horizontalHeader().setMinimumSectionSize(80)  # 设置最小宽度
+    def display_current_page(self):
+        """显示当前表当前页数据。"""
+        data = self.current_results_dict.get(self.current_table_name, [])
+        total_rows = len(data)
+        total_pages = self.get_total_pages(total_rows)
 
-        # 简历信息列 - 可拉伸模式，优先使用剩余空间
-        self.result_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-
-        # 设置表格属性，允许文本换行和自动调整行高
-        self.result_table.setWordWrap(True)  # 启用文本换行
-        self.result_table.setTextElideMode(Qt.ElideNone)  # 禁用省略号截断
-
-    def display_results(self, data, table_name: str):
-        """在表格中显示查询结果"""
-        # 如果没有数据，清空表格并返回
-        if not data:
-            self.result_table.setRowCount(0)
+        if total_rows == 0:
+            self.current_page = 1
+            fields, headers = self.get_table_columns(self.current_table_name)
+            self.result_model.set_data([], self.current_table_name, fields, headers, 0)
+            self.apply_table_view_layout(self.current_table_name)
+            self.update_pagination_controls(total_rows, total_pages)
             return
 
-        assessment_years = self.db.get_assessment_years() or []
-        field_mapping = get_table_field_by_header(table_name, assessment_years)
-
-        # 获取表格列数
-        col_count = self.result_table.columnCount()
-
-        # 设置行数
-        self.result_table.setRowCount(len(data))
-
-        # 获取列头信息用于数据映射
-        headers = []
-        for i in range(col_count):
-            headers.append(self.result_table.horizontalHeaderItem(i).text())
-
-        # 对所有表中的日期字段进行格式转换
-        for record in data:
-            # 日期格式转换
-            for field in TABLE_DATE_FIELDS.get(table_name, []):
-                if field in record and record[field]:
-                    value = str(record[field])
-                    # 转换格式：YYYY-MM-DD → YYYY.MM
-                    if re.match(r'^\d{4}-\d{2}-\d{2}$', value):
-                        record[field] = value[:7].replace('-', '.')
-                    # 处理浮点数格式（如1996.01）
-                    elif re.match(r'^\d{4}\.\d{2}$', value):
-                        record[field] = value
-                    # 处理整数格式（如199601）
-                    elif re.match(r'^\d{6}$', value):
-                        record[field] = f"{value[:4]}.{value[4:6]}"
-
-        # 填充数据
-        for row_idx, row_data in enumerate(data):
-            for col_idx, header in enumerate(headers):
-                field_name = field_mapping.get(header, header.lower())
-                value = row_data.get(field_name, '')
-                if value is None:
-                    value = ''
-
-                item = QTableWidgetItem(str(value))
-                item.setTextAlignment(Qt.AlignCenter)
-
-                # 关键修改1: 启用文本自动换行
-                item.setFlags(item.flags() | Qt.TextWordWrap)
-
-                # 关键修改2: 对于简历信息表启用富文本显示
-                if table_name == 'resume' and field_name == 'resume_text':
-                    item.setToolTip(value)  # 添加完整内容作为提示
-
-                self.result_table.setItem(row_idx, col_idx, item)
-
-        # 关键修改3: 自动调整行高以显示完整内容
+        self.current_page = max(1, min(self.current_page, total_pages))
+        start_index = (self.current_page - 1) * self.page_size
+        end_index = start_index + self.page_size
+        fields, headers = self.get_table_columns(self.current_table_name)
+        self.result_model.set_data(
+            data[start_index:end_index],
+            self.current_table_name,
+            fields,
+            headers,
+            start_index,
+        )
+        self.apply_table_view_layout(self.current_table_name)
         self.result_table.resizeRowsToContents()
-
-        # 关键修改4: 对于简历信息表特殊处理列宽
-        if table_name == 'resume':
-            # 简历列设置为可拉伸
-            self.result_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-
-        # 调整列宽
-        self.result_table.resizeColumnsToContents()
         self.result_table.scrollToTop()
+        self.update_pagination_controls(total_rows, total_pages)
+
+    def get_total_pages(self, total_rows: int) -> int:
+        if total_rows <= 0:
+            return 0
+        return (total_rows + self.page_size - 1) // self.page_size
+
+    def update_pagination_controls(self, total_rows: int, total_pages: int):
+        if total_pages == 0:
+            self.page_info_label.setText("第 0 / 0 页，共 0 条")
+            self.prev_page_btn.setEnabled(False)
+            self.next_page_btn.setEnabled(False)
+            return
+
+        self.page_info_label.setText(f"第 {self.current_page} / {total_pages} 页，共 {total_rows} 条")
+        self.prev_page_btn.setEnabled(self.current_page > 1)
+        self.next_page_btn.setEnabled(self.current_page < total_pages)
+
+    def previous_page(self):
+        if self.current_page <= 1:
+            return
+        self.current_page -= 1
+        self.display_current_page()
+
+    def next_page(self):
+        total_rows = len(self.current_results_dict.get(self.current_table_name, []))
+        if self.current_page >= self.get_total_pages(total_rows):
+            return
+        self.current_page += 1
+        self.display_current_page()

@@ -5,7 +5,10 @@ import os  # 添加os模块导入
 from datetime import datetime
 from typing import List, Dict, Any
 from openpyxl import load_workbook
-import xlrd
+try:
+    import xlrd
+except ImportError:
+    xlrd = None
 
 from core.database import Database
 from metadata.constants import TABLE_LABELS
@@ -51,7 +54,7 @@ def convert_excel_date(val: Any) -> str:
     return str(val)
 
 
-def prepare_import_records(
+def _prepare_import_records_with_metadata(
         file_path: str,
         db: Database,
         table_name: str,
@@ -59,29 +62,29 @@ def prepare_import_records(
 ) -> tuple:
     """读取并转换 Excel 记录，必要时保存年度考核配置。"""
     if table_name not in TABLE_LABELS:
-        return False, f"无效的表名: {table_name}", []
+        return False, f"无效的表名: {table_name}", [], []
 
     try:
         # 检查文件是否存在
         if not os.path.exists(file_path):
-            return False, f"文件不存在: {file_path}", []
+            return False, f"文件不存在: {file_path}", [], []
 
         # 检查文件格式
         file_ext = os.path.splitext(file_path)[1].lower()
         if file_ext not in ['.xlsx', '.xls']:
-            return False, f"不支持的文件格式: {file_ext}，请使用.xlsx或.xls格式", []
+            return False, f"不支持的文件格式: {file_ext}，请使用.xlsx或.xls格式", [], []
 
         # 尝试打开文件
         try:
             with open(file_path, 'rb') as test_file:
                 test_file.read(100)  # 读取文件头部验证文件可访问性
         except IOError as e:
-            return False, f"无法打开文件: {str(e)}", []
+            return False, f"无法打开文件: {str(e)}", [], []
 
         # 读取Excel文件（只读取第一个工作表）
         df = pd.read_excel(file_path, sheet_name=0, dtype=str)
         if df.empty:
-            return False, "Excel文件为空或未包含数据", []
+            return False, "Excel文件为空或未包含数据", [], []
 
         # 特殊处理：对奖惩信息和家庭成员信息表处理合并单元格
         if table_name in ['rewards', 'family']:
@@ -130,6 +133,9 @@ def prepare_import_records(
                     logger.warning("将继续导入，但合并单元格可能未被正确处理")
 
             elif file_ext == '.xls':
+                if xlrd is None:
+                    return False, "缺少xlrd依赖，无法处理.xls文件，请安装xlrd或使用.xlsx格式", [], []
+
                 # 处理.xls格式文件
                 try:
                     # 使用xlrd打开文件
@@ -176,18 +182,17 @@ def prepare_import_records(
         # 删除全空行
         df = df.dropna(how='all')
         if df.empty:
-            return False, "删除空行后数据为空", []
+            return False, "删除空行后数据为空", [], []
 
         # 记录导入后的数据样本
         logger.debug(f"导入后数据样本: \n{df.head(5).to_string()}")
 
         # ==== 新增：处理base_info表的年度考核字段 ====
         year_to_index = {}  # 年份到通用标记的映射
+        assessment_years = []
 
         if table_name == 'base_info':
             # 1. 识别年度考核字段
-            assessment_years = []
-
             for col in df.columns:
                 match = re.search(r'(\d{4})年年度考核结果', col)
                 if match:
@@ -198,21 +203,21 @@ def prepare_import_records(
             if assessment_years:
                 assessment_years.sort()
                 if len(assessment_years) != 5:
-                    return False, "必须包含连续的五个年度考核字段", []
+                    return False, "必须包含连续的五个年度考核字段", [], assessment_years
 
                 for i in range(1, 5):
                     if assessment_years[i] - assessment_years[i - 1] != 1:
-                        return False, "年度考核字段必须为连续五年", []
+                        return False, "年度考核字段必须为连续五年", [], assessment_years
 
                 # 3. 检查年份配置是否已存在
                 existing_years = db.get_assessment_years()
                 if persist_assessment_years and existing_years and existing_years != assessment_years:
-                    return False, f"年度考核区间不匹配（已配置: {existing_years}，当前: {assessment_years}），请先清空数据库", []
+                    return False, f"年度考核区间不匹配（已配置: {existing_years}，当前: {assessment_years}），请先清空数据库", [], assessment_years
 
                 # 4. 存储年份配置
                 if persist_assessment_years and not existing_years:
                     if not db.set_assessment_years(assessment_years):
-                        return False, "保存年度考核配置失败", []
+                        return False, "保存年度考核配置失败", [], assessment_years
 
                 # 5. 创建年份到通用标记的映射
                 year_to_index = {year: f"assessment_{idx}" for idx, year in enumerate(assessment_years)}
@@ -238,16 +243,98 @@ def prepare_import_records(
 
             records.append(record)
 
-        return True, f"成功读取{TABLE_LABELS[table_name]} {len(records)} 条记录", records
+        return True, f"成功读取{TABLE_LABELS[table_name]} {len(records)} 条记录", records, assessment_years
 
     except Exception as e:
         logger.error(f"导入{table_name}失败: {e}", exc_info=True)
-        return False, f"导入{TABLE_LABELS[table_name]}失败: {e}", []
+        return False, f"导入{TABLE_LABELS[table_name]}失败: {e}", [], []
+
+
+def prepare_import_records(
+        file_path: str,
+        db: Database,
+        table_name: str,
+        persist_assessment_years: bool = False
+) -> tuple:
+    """读取并转换 Excel 记录，必要时保存年度考核配置。"""
+    success, message, records, _ = _prepare_import_records_with_metadata(
+        file_path,
+        db,
+        table_name,
+        persist_assessment_years
+    )
+    return success, message, records
+
+
+def prepare_import_preview(file_path: str, db_path: str, table_name: str) -> dict:
+    """后台预读 Excel，并返回重复记录信息。"""
+    db = Database(db_path)
+    try:
+        success, message, records, assessment_years = _prepare_import_records_with_metadata(
+            file_path,
+            db,
+            table_name,
+            persist_assessment_years=False
+        )
+        if not success:
+            return {
+                "success": False,
+                "message": message,
+                "records": [],
+                "duplicate_keys": [],
+                "assessment_years": assessment_years,
+            }
+
+        duplicate_keys = db.find_duplicate_person_keys(table_name, records)
+        return {
+            "success": True,
+            "message": message,
+            "records": records,
+            "duplicate_keys": duplicate_keys,
+            "assessment_years": assessment_years,
+        }
+    finally:
+        db.close()
+
+
+def import_prepared_records(
+        db_path: str,
+        table_name: str,
+        records: List[Dict[str, Any]],
+        assessment_years=None,
+        overwrite: bool = False
+) -> dict:
+    """将已解析的记录写入数据库，供后台线程调用。"""
+    db = Database(db_path)
+    try:
+        if overwrite and not db.clear_table_data(table_name):
+            return {"success": False, "message": f"清空{TABLE_LABELS[table_name]}失败，请查看日志"}
+
+        if table_name == 'base_info' and assessment_years:
+            existing_years = db.get_assessment_years()
+            if existing_years and existing_years != assessment_years:
+                return {
+                    "success": False,
+                    "message": f"年度考核区间不匹配（已配置: {existing_years}，当前: {assessment_years}），请先清空数据库",
+                }
+            if not existing_years and not db.set_assessment_years(assessment_years):
+                return {"success": False, "message": "保存年度考核配置失败"}
+
+        db.import_excel_data(table_name, records)
+        return {
+            "success": True,
+            "message": f"成功导入{TABLE_LABELS[table_name]} {len(records)} 条记录",
+        }
+    except Exception as e:
+        logger.error(f"导入{table_name}失败: {e}", exc_info=True)
+        return {"success": False, "message": f"导入{TABLE_LABELS[table_name]}失败: {e}"}
+    finally:
+        db.close()
 
 
 def import_specific_table(file_path: str, db: Database, table_name: str) -> (bool, str):
     """将Excel文件导入到指定数据库表，支持合并单元格处理"""
-    success, message, records = prepare_import_records(
+    success, message, records, _ = _prepare_import_records_with_metadata(
         file_path,
         db,
         table_name,

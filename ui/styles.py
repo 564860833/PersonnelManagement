@@ -81,7 +81,7 @@ ANALYSIS_FIELD_LABEL_STYLE = "color: #333; font-weight: bold; margin-bottom: 5px
 COMPACT_BUTTON_STYLE = "padding: 3px;"
 
 RESULT_TABLE_STYLE = """
-QTableWidget {
+QTableWidget, QTableView {
     gridline-color: #d8d8d8;
     selection-background-color: #dfefff;
 }

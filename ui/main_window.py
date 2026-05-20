@@ -1,19 +1,20 @@
 import logging
 import os
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QThread
 from PyQt5.QtWidgets import (
     QMainWindow, QTabWidget, QAction, QFileDialog,
-    QMessageBox, QStatusBar, QDialog, QLabel
+    QMessageBox, QStatusBar, QDialog, QLabel, QProgressDialog
 )
 from services.excel_export import export_table_data
-from services.excel_import import import_specific_table, prepare_import_records
+from services.excel_import import import_prepared_records, prepare_import_preview
 from config import config
 from ui.change_password import ChangePasswordDialog
 from ui.user_management import AddUserDialog, UserManagementDialog
 from ui.log_viewer import LogViewer
 from ui.styles import NO_PERMISSION_LABEL_STYLE
 from ui.toast import show_toast
+from ui.worker import Worker, WorkerResultHandler
 from metadata.constants import ADMIN_PERMISSIONS, DEFAULT_PERMISSIONS, TABLE_LABELS
 
 logger = logging.getLogger('MainWindow')
@@ -28,6 +29,7 @@ class MainWindow(QMainWindow):
         self.last_import_dir = ""
         self.last_export_dir = ""
         self._last_tab_index = -1
+        self._background_tasks = []
 
         # 确保权限字典不为空
         self.permissions = permissions or DEFAULT_PERMISSIONS.copy()
@@ -162,6 +164,55 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'status_bar'):
             self.status_bar.showMessage(message, timeout)
 
+    def run_background_task(self, title: str, task_fn, on_success=None, on_error=None):
+        """在线程中执行耗时任务，并显示忙碌进度框。"""
+        progress = QProgressDialog(title, "", 0, 0, self)
+        progress.setWindowTitle("请稍候")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setCancelButton(None)
+        progress.setMinimumDuration(0)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        progress.show()
+
+        thread = QThread(self)
+        worker = Worker(task_fn)
+        worker.moveToThread(thread)
+
+        task_ref = {
+            "thread": thread,
+            "worker": worker,
+            "progress": progress,
+        }
+
+        def default_error(message: str):
+            QMessageBox.critical(self, "操作失败", message)
+
+        def cleanup():
+            progress.close()
+            progress.deleteLater()
+            handler.deleteLater()
+            if task_ref in self._background_tasks:
+                self._background_tasks.remove(task_ref)
+
+        handler = WorkerResultHandler(
+            on_success=on_success,
+            on_error=on_error or default_error,
+            on_done=cleanup,
+            parent=self,
+        )
+        task_ref["handler"] = handler
+        self._background_tasks.append(task_ref)
+
+        thread.started.connect(worker.run)
+        worker.finished.connect(handler.handle_finished)
+        worker.failed.connect(handler.handle_failed)
+        worker.done.connect(handler.handle_done)
+        worker.done.connect(worker.deleteLater)
+        worker.done.connect(thread.quit)
+        thread.finished.connect(thread.deleteLater)
+        thread.start()
+
     # =================== 新增导出数据方法 ===================
     def export_data(self, table_name: str):
         """导出指定表的数据到Excel文件"""
@@ -199,20 +250,30 @@ class MainWindow(QMainWindow):
                 return  # 用户取消了保存
             self.last_export_dir = self.get_selected_dir(file_path)
 
-            try:
-                exported_count = export_table_data(data, file_path, table_name)
+            export_data = [dict(row) for row in data]
 
+            def export_task():
+                return export_table_data(export_data, file_path, table_name)
+
+            def handle_export_success(exported_count):
                 self.set_status(f"导出成功：{chinese_name}，{exported_count} 条，保存到 {file_path}")
                 show_toast(self, f"{chinese_name}导出成功，共 {exported_count} 条")
                 logger.info(f"成功导出{table_name}数据到: {file_path}")
 
-            except Exception as e:
-                logger.error(f"导出{table_name}失败: {e}")
+            def handle_export_error(message: str):
+                logger.error(f"导出{table_name}失败: {message}")
                 self.set_status(f"导出失败：{chinese_name}")
                 QMessageBox.critical(
                     self, "导出失败",
-                    f"导出{chinese_name}时发生错误:\n{str(e)}"
+                    f"导出{chinese_name}时发生错误:\n{message}"
                 )
+
+            self.run_background_task(
+                f"正在导出{chinese_name}...",
+                export_task,
+                handle_export_success,
+                handle_export_error,
+            )
 
         except Exception as e:
             logger.error(f"导出过程中发生未预期错误: {e}")
@@ -337,43 +398,73 @@ class MainWindow(QMainWindow):
             return
         self.last_import_dir = self.get_selected_dir(file_path)
 
-        try:
-            preview_success, preview_message, preview_records = prepare_import_records(file_path, self.db, table_name)
-            if not preview_success:
-                QMessageBox.critical(self, "导入失败", preview_message)
-                self.set_status(f"导入失败：{TABLE_LABELS[table_name]}，{preview_message}")
+        table_label = TABLE_LABELS[table_name]
+
+        def preview_task():
+            return prepare_import_preview(file_path, config.DB_PATH, table_name)
+
+        def handle_preview_success(preview_result):
+            if not preview_result.get("success"):
+                message = preview_result.get("message", "读取文件失败")
+                QMessageBox.critical(self, "导入失败", message)
+                self.set_status(f"导入失败：{table_label}，{message}")
                 return
 
-            duplicate_keys = self.db.find_duplicate_person_keys(table_name, preview_records)
+            duplicate_keys = preview_result.get("duplicate_keys", [])
             import_mode = self.confirm_import_mode(table_name, duplicate_keys)
             if import_mode == 'cancel':
-                self.set_status(f"导入已取消：{TABLE_LABELS[table_name]}")
+                self.set_status(f"导入已取消：{table_label}")
                 return
 
-            if import_mode == 'overwrite':
-                if not self.db.clear_table_data(table_name):
-                    QMessageBox.critical(self, "导入失败", f"清空{TABLE_LABELS[table_name]}失败，请查看日志")
-                    self.set_status(f"覆盖导入失败：清空{TABLE_LABELS[table_name]}失败")
-                    return
-                self.clear_query_cache()
+            mode_label = "覆盖导入" if import_mode == 'overwrite' else "追加导入"
+            overwrite = import_mode == 'overwrite'
 
-            # 调用新的导入函数
-            success, message = import_specific_table(file_path, self.db, table_name)
-            if success:
+            def import_task():
+                return import_prepared_records(
+                    config.DB_PATH,
+                    table_name,
+                    preview_result.get("records", []),
+                    preview_result.get("assessment_years"),
+                    overwrite=overwrite,
+                )
+
+            def handle_import_success(import_result):
+                message = import_result.get("message", "导入完成")
+                if not import_result.get("success"):
+                    QMessageBox.critical(self, "导入失败", message)
+                    self.set_status(f"导入失败：{table_label}，{message}")
+                    return
+
                 self.clear_query_cache()
-                mode_label = "覆盖导入" if import_mode == 'overwrite' else "追加导入"
-                self.set_status(f"{mode_label}成功：{TABLE_LABELS[table_name]}，{message}")
-                show_toast(self, f"{mode_label}成功：{TABLE_LABELS[table_name]}，{message}")
-            else:
+                self.set_status(f"{mode_label}成功：{table_label}，{message}")
+                show_toast(self, f"{mode_label}成功：{table_label}，{message}")
+
+            def handle_import_error(message: str):
                 QMessageBox.critical(self, "导入失败", message)
-                self.set_status(f"导入失败：{TABLE_LABELS[table_name]}，{message}")
-        except Exception as e:
-            logger.exception(f"导入{table_name}过程中发生异常")
-            QMessageBox.critical(
-                self, "导入出错",
-                f"导入{TABLE_LABELS[table_name]}时发生错误：{e}\n请查看日志获取详细信息"
+                self.set_status(f"导入失败：{table_label}，{message}")
+
+            self.run_background_task(
+                f"正在{mode_label}{table_label}...",
+                import_task,
+                handle_import_success,
+                handle_import_error,
             )
-            self.set_status(f"导入异常：{TABLE_LABELS[table_name]}，请查看日志")
+
+        def handle_preview_error(message: str):
+            logger.error(f"读取{table_name}导入文件失败: {message}")
+            QMessageBox.critical(
+                self,
+                "导入出错",
+                f"读取{table_label}导入文件时发生错误：{message}\n请查看日志获取详细信息"
+            )
+            self.set_status(f"导入异常：{table_label}，请查看日志")
+
+        self.run_background_task(
+            f"正在读取{table_label}数据...",
+            preview_task,
+            handle_preview_success,
+            handle_preview_error,
+        )
 
     def on_clear_database(self):
         """清空数据库前提示确认"""
