@@ -103,6 +103,46 @@ BUTTON_STYLES = {
 ANALYSIS_FIELD_LABEL_STYLE = "color: #333; font-weight: bold; margin-bottom: 5px;"
 COMPACT_BUTTON_STYLE = "padding: 3px;"
 
+PAGINATION_BUTTON_STYLE = """
+QPushButton#pageNavButton,
+QPushButton#pageNumberButton,
+QPushButton#pageEllipsis {
+    min-width: 32px;
+    max-width: 32px;
+    min-height: 32px;
+    max-height: 32px;
+    padding: 0;
+    border: 1px solid #d0d7de;
+    border-radius: 5px;
+    background-color: #ffffff;
+    color: #24292f;
+    font-weight: normal;
+}
+QPushButton#pageNavButton:hover,
+QPushButton#pageNumberButton:hover {
+    background-color: #EAF2FB;
+    border-color: #8BB6E8;
+    color: #174A8B;
+}
+QPushButton#pageNumberButton[active="true"] {
+    background-color: #1E5AA8;
+    border-color: #1E5AA8;
+    color: #ffffff;
+    font-weight: bold;
+}
+QPushButton#pageNavButton:disabled,
+QPushButton#pageNumberButton:disabled {
+    background-color: #f6f8fa;
+    border-color: #eaeef2;
+    color: #c9d1d9;
+}
+QPushButton#pageEllipsis {
+    border-color: transparent;
+    background-color: transparent;
+    color: #6e7781;
+}
+"""
+
 QUERY_FORM_CONTROL_STYLE = """
 QLabel#queryFormLabel {
     color: #333;

@@ -29,8 +29,8 @@ from metadata.query_options import (
 from ui.styles import (
     ANALYSIS_FIELD_LABEL_STYLE,
     CARD_STYLE,
-    COMPACT_BUTTON_STYLE,
     PAGE_BACKGROUND_STYLE,
+    PAGINATION_BUTTON_STYLE,
     QUERY_FORM_CONTROL_STYLE,
     RESULT_TABLE_STYLE,
     button_style,
@@ -794,20 +794,32 @@ class QueryTab(QWidget):
         result_layout.addWidget(self.result_table)
 
         pagination_layout = QHBoxLayout()
-        self.prev_page_btn = QPushButton("上一页")
-        self.prev_page_btn.setFixedWidth(90)
-        self.prev_page_btn.setStyleSheet(COMPACT_BUTTON_STYLE)
+        pagination_layout.setContentsMargins(0, 6, 0, 0)
+        pagination_layout.setSpacing(8)
+
+        self.pagination_summary_label = QLabel("共 0 条")
+        self.pagination_summary_label.setStyleSheet("color: #57606a;")
+
+        self.prev_page_btn = QPushButton("<")
+        self.prev_page_btn.setObjectName("pageNavButton")
+        self.prev_page_btn.setToolTip("上一页")
+        self.prev_page_btn.setStyleSheet(PAGINATION_BUTTON_STYLE)
         self.prev_page_btn.clicked.connect(self.previous_page)
-        self.page_info_label = QLabel("第 0 / 0 页，共 0 条")
-        self.page_info_label.setAlignment(Qt.AlignCenter)
-        self.next_page_btn = QPushButton("下一页")
-        self.next_page_btn.setFixedWidth(90)
-        self.next_page_btn.setStyleSheet(COMPACT_BUTTON_STYLE)
+
+        self.page_buttons_layout = QHBoxLayout()
+        self.page_buttons_layout.setContentsMargins(0, 0, 0, 0)
+        self.page_buttons_layout.setSpacing(6)
+
+        self.next_page_btn = QPushButton(">")
+        self.next_page_btn.setObjectName("pageNavButton")
+        self.next_page_btn.setToolTip("下一页")
+        self.next_page_btn.setStyleSheet(PAGINATION_BUTTON_STYLE)
         self.next_page_btn.clicked.connect(self.next_page)
 
         pagination_layout.addStretch()
+        pagination_layout.addWidget(self.pagination_summary_label)
         pagination_layout.addWidget(self.prev_page_btn)
-        pagination_layout.addWidget(self.page_info_label)
+        pagination_layout.addLayout(self.page_buttons_layout)
         pagination_layout.addWidget(self.next_page_btn)
         pagination_layout.addStretch()
         result_layout.addLayout(pagination_layout)
@@ -1260,26 +1272,81 @@ class QueryTab(QWidget):
             return 0
         return (total_rows + self.page_size - 1) // self.page_size
 
+    def get_visible_page_items(self, total_pages: int):
+        if total_pages <= 7:
+            return list(range(1, total_pages + 1))
+
+        if self.current_page <= 4:
+            return [1, 2, 3, 4, 5, "...", total_pages]
+
+        if self.current_page >= total_pages - 3:
+            return [1, "..."] + list(range(total_pages - 4, total_pages + 1))
+
+        return [
+            1,
+            "...",
+            self.current_page - 1,
+            self.current_page,
+            self.current_page + 1,
+            "...",
+            total_pages,
+        ]
+
+    def clear_page_buttons(self):
+        while self.page_buttons_layout.count():
+            item = self.page_buttons_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    def create_page_button(self, page_item):
+        if page_item == "...":
+            button = QPushButton("...")
+            button.setObjectName("pageEllipsis")
+            button.setEnabled(False)
+            button.setStyleSheet(PAGINATION_BUTTON_STYLE)
+            return button
+
+        button = QPushButton(str(page_item))
+        button.setObjectName("pageNumberButton")
+        button.setProperty("active", "true" if page_item == self.current_page else "false")
+        button.setToolTip(f"第 {page_item} 页")
+        button.setStyleSheet(PAGINATION_BUTTON_STYLE)
+        button.clicked.connect(lambda _, page=page_item: self.go_to_page(page))
+        return button
+
+    def refresh_page_buttons(self, total_pages: int):
+        self.clear_page_buttons()
+        for page_item in self.get_visible_page_items(total_pages):
+            self.page_buttons_layout.addWidget(self.create_page_button(page_item))
+
     def update_pagination_controls(self, total_rows: int, total_pages: int):
         if total_pages == 0:
-            self.page_info_label.setText("第 0 / 0 页，共 0 条")
+            self.pagination_summary_label.setText("共 0 条")
             self.prev_page_btn.setEnabled(False)
             self.next_page_btn.setEnabled(False)
+            self.clear_page_buttons()
             return
 
-        self.page_info_label.setText(f"第 {self.current_page} / {total_pages} 页，共 {total_rows} 条")
+        self.current_page = max(1, min(self.current_page, total_pages))
+        self.pagination_summary_label.setText(f"共 {total_rows} 条，每页 {self.page_size} 条")
         self.prev_page_btn.setEnabled(self.current_page > 1)
         self.next_page_btn.setEnabled(self.current_page < total_pages)
+        self.refresh_page_buttons(total_pages)
 
     def previous_page(self):
-        if self.current_page <= 1:
-            return
-        self.current_page -= 1
-        self.display_current_page()
+        self.go_to_page(self.current_page - 1)
 
     def next_page(self):
+        self.go_to_page(self.current_page + 1)
+
+    def go_to_page(self, page: int):
         total_rows = len(self.current_results_dict.get(self.current_table_name, []))
-        if self.current_page >= self.get_total_pages(total_rows):
+        total_pages = self.get_total_pages(total_rows)
+        if total_pages == 0:
             return
-        self.current_page += 1
+        target_page = max(1, min(page, total_pages))
+        if target_page == self.current_page:
+            return
+        self.current_page = target_page
         self.display_current_page()
