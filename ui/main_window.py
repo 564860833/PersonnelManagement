@@ -13,6 +13,7 @@ from ui.change_password import ChangePasswordDialog
 from ui.user_management import AddUserDialog, UserManagementDialog
 from ui.log_viewer import LogViewer
 from ui.styles import NO_PERMISSION_LABEL_STYLE
+from ui.toast import show_toast
 from metadata.constants import ADMIN_PERMISSIONS, DEFAULT_PERMISSIONS, TABLE_LABELS
 
 logger = logging.getLogger('MainWindow')
@@ -24,7 +25,8 @@ class MainWindow(QMainWindow):
         self.db = db
         self.username = username
         self.query_tab = None  # 添加这一行
-        self.last_dir = ""
+        self.last_import_dir = ""
+        self.last_export_dir = ""
         self._last_tab_index = -1
 
         # 确保权限字典不为空
@@ -179,26 +181,29 @@ class MainWindow(QMainWindow):
                 return
 
             chinese_name = TABLE_LABELS.get(table_name, table_name)
+            default_file_name = f"{chinese_name}.xlsx"
+            last_dialog_dir = self.get_dialog_dir(self.last_export_dir)
+            default_save_path = (
+                os.path.join(last_dialog_dir, default_file_name)
+                if last_dialog_dir else default_file_name
+            )
 
             # 选择保存位置
             file_path, _ = QFileDialog.getSaveFileName(
                 self, f"保存{chinese_name}",
-                f"{chinese_name}.xlsx",
+                default_save_path,
                 "Excel文件 (*.xlsx)"
             )
 
             if not file_path:
                 return  # 用户取消了保存
+            self.last_export_dir = self.get_selected_dir(file_path)
 
             try:
                 exported_count = export_table_data(data, file_path, table_name)
 
-                # 显示成功消息
-                QMessageBox.information(
-                    self, "导出成功",
-                    f"{chinese_name}已成功导出到:\n{file_path}\n\n共导出{exported_count}条记录"
-                )
                 self.set_status(f"导出成功：{chinese_name}，{exported_count} 条，保存到 {file_path}")
+                show_toast(self, f"{chinese_name}导出成功，共 {exported_count} 条")
                 logger.info(f"成功导出{table_name}数据到: {file_path}")
 
             except Exception as e:
@@ -238,8 +243,8 @@ class MainWindow(QMainWindow):
             try:
                 with open(config.LOG_FILE, 'w') as f:
                     f.write("")
-                QMessageBox.information(self, "成功", "日志文件已清空")
                 self.set_status("日志文件已清空")
+                show_toast(self, "日志文件已清空")
                 logger.info("用户清空了日志文件")
             except Exception as e:
                 logger.error(f"清空日志文件失败: {e}")
@@ -266,17 +271,15 @@ class MainWindow(QMainWindow):
 
         self._last_tab_index = index
 
-    def get_last_dialog_dir(self) -> str:
+    def get_dialog_dir(self, path: str) -> str:
         """获取文件选择框可用的初始目录。"""
-        if self.last_dir and os.path.isdir(self.last_dir):
-            return self.last_dir
+        if path and os.path.isdir(path):
+            return path
         return ""
 
-    def remember_last_dir(self, file_path: str):
-        """记录用户最近一次选择文件所在目录。"""
-        selected_dir = os.path.dirname(file_path)
-        if selected_dir:
-            self.last_dir = selected_dir
+    def get_selected_dir(self, file_path: str) -> str:
+        """获取用户选择文件所在目录。"""
+        return os.path.dirname(file_path) if file_path else ""
 
     def confirm_import_mode(self, table_name: str, duplicate_keys: list) -> str:
         """当本次导入记录与数据库已有记录重复时，确认导入方式。"""
@@ -328,11 +331,11 @@ class MainWindow(QMainWindow):
 
         file_path, _ = QFileDialog.getOpenFileName(
             self, f"选择{TABLE_LABELS[table_name]}数据文件",
-            self.get_last_dialog_dir(), "Excel Files (*.xlsx *.xls)"
+            self.get_dialog_dir(self.last_import_dir), "Excel Files (*.xlsx *.xls)"
         )
         if not file_path:
             return
-        self.remember_last_dir(file_path)
+        self.last_import_dir = self.get_selected_dir(file_path)
 
         try:
             preview_success, preview_message, preview_records = prepare_import_records(file_path, self.db, table_name)
@@ -359,8 +362,8 @@ class MainWindow(QMainWindow):
             if success:
                 self.clear_query_cache()
                 mode_label = "覆盖导入" if import_mode == 'overwrite' else "追加导入"
-                QMessageBox.information(self, "导入成功", message)
                 self.set_status(f"{mode_label}成功：{TABLE_LABELS[table_name]}，{message}")
+                show_toast(self, f"{mode_label}成功：{TABLE_LABELS[table_name]}，{message}")
             else:
                 QMessageBox.critical(self, "导入失败", message)
                 self.set_status(f"导入失败：{TABLE_LABELS[table_name]}，{message}")
@@ -385,8 +388,8 @@ class MainWindow(QMainWindow):
         """实际执行数据库清空操作（移除内部的确认对话框）"""
         if self.db.clear_business_data():
             self.clear_query_cache()
-            QMessageBox.information(self, "提示", "数据库已清空。")
             self.set_status("数据库已清空，查询结果已清除")
+            show_toast(self, "数据库已清空，查询结果已清除")
             return
 
         self.set_status("清空数据库失败，请查看日志")
@@ -396,7 +399,6 @@ class MainWindow(QMainWindow):
         """弹出修改密码对话框"""
         dlg = ChangePasswordDialog(self.db, self.username)
         if dlg.exec_() == QDialog.Accepted:
-            QMessageBox.information(self, "提示", "密码修改成功，请重新登录")
             self.close()
 
     def on_add_user(self):
