@@ -6,6 +6,7 @@ import markdown
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QTextEdit, QLineEdit,
                              QPushButton, QLabel, QHBoxLayout, QComboBox, QGroupBox, QMessageBox)
 from PyQt5.QtCore import pyqtSignal, QObject
+from ui.styles import DIALOG_BASE_STYLE, DIALOG_BUTTON_STYLE
 
 logger = logging.getLogger('AIChat')
 
@@ -108,9 +109,13 @@ class AIChatDialog(QDialog):
 
     def setup_ui(self):
         layout = QVBoxLayout()
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+        self.setStyleSheet(DIALOG_BASE_STYLE + DIALOG_BUTTON_STYLE)
 
         settings_group = QGroupBox("Ollama 模型设置")
         settings_layout = QHBoxLayout()
+        settings_layout.setSpacing(8)
 
         settings_layout.addWidget(QLabel("选择模型:"))
         self.model_combo = QComboBox()
@@ -118,6 +123,7 @@ class AIChatDialog(QDialog):
         settings_layout.addWidget(self.model_combo)
 
         self.refresh_btn = QPushButton("刷新列表")
+        self.refresh_btn.setObjectName("secondaryButton")
         self.refresh_btn.clicked.connect(self.refresh_models)
         settings_layout.addWidget(self.refresh_btn)
 
@@ -130,6 +136,7 @@ class AIChatDialog(QDialog):
 
         # 新增：清空对话按钮
         self.clear_btn = QPushButton("清空对话")
+        self.clear_btn.setObjectName("secondaryButton")
         self.clear_btn.clicked.connect(self.clear_chat)
         settings_layout.addWidget(self.clear_btn)
 
@@ -142,20 +149,22 @@ class AIChatDialog(QDialog):
         layout.addWidget(self.chat_history)
 
         input_layout = QHBoxLayout()
+        input_layout.setSpacing(8)
         self.input_field = QLineEdit()
         self.input_field.setPlaceholderText("请输入您的问题...")
         self.input_field.returnPressed.connect(self.start_inference)
 
         self.send_btn = QPushButton("发送")
+        self.send_btn.setObjectName("primaryButton")
         self.send_btn.clicked.connect(self.start_inference)
         self.send_btn.setDefault(True)
-        self.send_btn.setStyleSheet("background-color: #2196F3; color: white; padding: 5px 15px;")
 
         input_layout.addWidget(self.input_field)
         input_layout.addWidget(self.send_btn)
         layout.addLayout(input_layout)
 
         self.status_label = QLabel("正在初始化...")
+        self.status_label.setObjectName("dialogSubtitle")
         layout.addWidget(self.status_label)
 
         self.setLayout(layout)

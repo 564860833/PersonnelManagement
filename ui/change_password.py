@@ -3,6 +3,7 @@
 from PyQt5.QtWidgets import (QDialog, QLabel, QLineEdit, QPushButton,
                              QVBoxLayout, QHBoxLayout, QMessageBox)
 from PyQt5.QtCore import Qt
+from ui.styles import DIALOG_BASE_STYLE, DIALOG_BUTTON_STYLE
 import logging
 
 logger = logging.getLogger('ChangePwd')
@@ -14,14 +15,20 @@ class ChangePasswordDialog(QDialog):
         self.username = username
         self.setWindowTitle("修改密码")
         self.setup_ui()
-        self.setFixedSize(350, 200)
+        self.setMinimumSize(380, 250)
 
     def setup_ui(self):
         layout = QVBoxLayout()
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(12)
+        self.setStyleSheet(DIALOG_BASE_STYLE + DIALOG_BUTTON_STYLE)
 
         # 旧密码
         old_layout = QHBoxLayout()
-        old_layout.addWidget(QLabel("旧密码:"))
+        old_label = QLabel("旧密码")
+        old_label.setObjectName("fieldLabel")
+        old_label.setMinimumWidth(88)
+        old_layout.addWidget(old_label)
         self.old_edit = QLineEdit()
         self.old_edit.setEchoMode(QLineEdit.Password)
         old_layout.addWidget(self.old_edit)
@@ -29,7 +36,10 @@ class ChangePasswordDialog(QDialog):
 
         # 新密码
         new_layout = QHBoxLayout()
-        new_layout.addWidget(QLabel("新密码:"))
+        new_label = QLabel("新密码")
+        new_label.setObjectName("fieldLabel")
+        new_label.setMinimumWidth(88)
+        new_layout.addWidget(new_label)
         self.new_edit = QLineEdit()
         self.new_edit.setEchoMode(QLineEdit.Password)
         new_layout.addWidget(self.new_edit)
@@ -37,7 +47,10 @@ class ChangePasswordDialog(QDialog):
 
         # 确认新密码
         confirm_layout = QHBoxLayout()
-        confirm_layout.addWidget(QLabel("确认密码:"))
+        confirm_label = QLabel("确认密码")
+        confirm_label.setObjectName("fieldLabel")
+        confirm_label.setMinimumWidth(88)
+        confirm_layout.addWidget(confirm_label)
         self.confirm_edit = QLineEdit()
         self.confirm_edit.setEchoMode(QLineEdit.Password)
         confirm_layout.addWidget(self.confirm_edit)
@@ -47,8 +60,10 @@ class ChangePasswordDialog(QDialog):
         btn_layout = QHBoxLayout()
         btn_layout.setAlignment(Qt.AlignCenter)
         ok_btn = QPushButton("确定")
+        ok_btn.setObjectName("primaryButton")
         ok_btn.clicked.connect(self.on_ok)
         cancel_btn = QPushButton("取消")
+        cancel_btn.setObjectName("secondaryButton")
         cancel_btn.clicked.connect(self.reject)
         btn_layout.addWidget(ok_btn)
         btn_layout.addWidget(cancel_btn)

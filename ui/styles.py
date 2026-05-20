@@ -7,7 +7,6 @@ THEME_BORDER = "#8BB6E8"
 
 TABLE_ROW_BACKGROUND = "#FFFFFF"
 TABLE_ROW_ALTERNATE_BACKGROUND = "#F7F9FC"
-TABLE_ROW_HOVER_BACKGROUND = THEME_LIGHT
 
 PAGE_BACKGROUND_STYLE = """
 QWidget#queryPage {
@@ -20,6 +19,167 @@ QFrame#sectionCard {
     background-color: #FFFFFF;
     border: none;
     border-radius: 8px;
+}
+"""
+
+DIALOG_BASE_STYLE = """
+QDialog {
+    background-color: #F0F2F5;
+    color: #24292f;
+}
+QFrame#dialogPanel,
+QFrame#loginCard {
+    background-color: #FFFFFF;
+    border: none;
+    border-radius: 8px;
+}
+QLabel#dialogTitle {
+    color: #174A8B;
+    font-size: 16px;
+    font-weight: bold;
+}
+QLabel#dialogSubtitle {
+    color: #57606a;
+}
+QLabel#fieldLabel {
+    color: #333333;
+    font-weight: bold;
+}
+QLineEdit,
+QComboBox,
+QTextEdit {
+    min-height: 30px;
+    padding: 4px 8px;
+    border: 1px solid #d0d7de;
+    border-radius: 5px;
+    background-color: #ffffff;
+    color: #24292f;
+}
+QLineEdit:focus,
+QComboBox:focus,
+QTextEdit:focus {
+    border: 1px solid #8BB6E8;
+    background-color: #F7FBFF;
+}
+QComboBox::drop-down {
+    border: none;
+    width: 24px;
+}
+QGroupBox {
+    margin-top: 14px;
+    padding: 14px 10px 10px 10px;
+    border: 1px solid #e5eaf0;
+    border-radius: 8px;
+    background-color: #ffffff;
+    color: #174A8B;
+    font-weight: bold;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 10px;
+    padding: 0 4px;
+}
+QScrollArea {
+    border: 1px solid #e5eaf0;
+    border-radius: 6px;
+    background-color: #ffffff;
+}
+QScrollArea > QWidget > QWidget {
+    background-color: #ffffff;
+}
+QCheckBox {
+    spacing: 8px;
+    color: #24292f;
+}
+QTableWidget,
+QTableView {
+    gridline-color: #d8d8d8;
+    selection-background-color: #D8E9F9;
+    selection-color: #174A8B;
+    alternate-background-color: #F7F9FC;
+    background-color: #FFFFFF;
+    border: 1px solid #d8dee4;
+    border-radius: 6px;
+}
+QTableWidget::item:selected,
+QTableView::item:selected {
+    background-color: #D8E9F9;
+    color: #174A8B;
+}
+QHeaderView::section {
+    background-color: #EAF2FB;
+    color: #174A8B;
+    padding: 6px;
+    border: 1px solid #8BB6E8;
+    font-weight: bold;
+}
+"""
+
+DIALOG_BUTTON_STYLE = """
+QPushButton {
+    min-height: 30px;
+    padding: 4px 14px;
+    border: 1px solid #c9d1d9;
+    border-radius: 5px;
+    background-color: #ffffff;
+    color: #24292f;
+}
+QPushButton:hover {
+    background-color: #f6f8fa;
+}
+QPushButton#primaryButton {
+    background-color: #1E5AA8;
+    border-color: #1E5AA8;
+    color: #ffffff;
+    font-weight: bold;
+}
+QPushButton#primaryButton:hover {
+    background-color: #174A8B;
+}
+QPushButton#secondaryButton {
+    background-color: #ffffff;
+    border-color: #c9d1d9;
+    color: #24292f;
+}
+QPushButton#secondaryButton:hover {
+    background-color: #EAF2FB;
+    border-color: #8BB6E8;
+    color: #174A8B;
+}
+QPushButton#dangerButton {
+    background-color: #B42318;
+    border-color: #B42318;
+    color: #ffffff;
+    font-weight: bold;
+}
+QPushButton#dangerButton:hover {
+    background-color: #8F1D16;
+}
+QPushButton:disabled {
+    background-color: #f6f8fa;
+    border-color: #eaeef2;
+    color: #8c959f;
+}
+"""
+
+LOGIN_DIALOG_STYLE = DIALOG_BASE_STYLE + DIALOG_BUTTON_STYLE + """
+QDialog#loginDialog {
+    background-color: #F0F2F5;
+}
+QLabel#loginTitle {
+    color: #174A8B;
+    font-size: 20px;
+    font-weight: bold;
+}
+QLabel#loginSubtitle {
+    color: #57606a;
+    font-size: 12px;
+}
+QFrame#loginDivider {
+    background-color: #EAF2FB;
+    min-height: 1px;
+    max-height: 1px;
+    border: none;
 }
 """
 
@@ -274,9 +434,14 @@ QPushButton#yearCell:disabled {
 RESULT_TABLE_STYLE = """
 QTableWidget, QTableView {
     gridline-color: #d8d8d8;
-    selection-background-color: #EAF2FB;
+    selection-background-color: #D8E9F9;
+    selection-color: #174A8B;
     alternate-background-color: #F7F9FC;
     background-color: #FFFFFF;
+}
+QTableWidget::item:selected, QTableView::item:selected {
+    background-color: #D8E9F9;
+    color: #174A8B;
 }
 QHeaderView::section {
     background-color: #EAF2FB;

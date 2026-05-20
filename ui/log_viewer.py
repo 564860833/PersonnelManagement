@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import (QDialog, QTextEdit, QPushButton, QVBoxLayout,
                              QComboBox, QMainWindow)
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont, QTextCursor
+from ui.styles import DIALOG_BASE_STYLE, DIALOG_BUTTON_STYLE
 
 logger = logging.getLogger('LogViewer')
 
@@ -37,15 +38,20 @@ class LogViewer(QDialog):
 
     def setup_ui(self):
         layout = QVBoxLayout()
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+        self.setStyleSheet(DIALOG_BASE_STYLE + DIALOG_BUTTON_STYLE)
 
         # 路径显示
         path_layout = QHBoxLayout()
         path_layout.addWidget(QLabel("日志文件:"))
         self.path_label = QLabel(self.log_file_path or "未选择日志文件")
+        self.path_label.setObjectName("dialogSubtitle")
         path_layout.addWidget(self.path_label, 1)
 
         # 文件选择按钮
         self.select_btn = QPushButton("选择日志文件")
+        self.select_btn.setObjectName("secondaryButton")
         self.select_btn.clicked.connect(self.select_log_file)
         path_layout.addWidget(self.select_btn)
 
@@ -69,6 +75,7 @@ class LogViewer(QDialog):
         encoding_layout.addWidget(self.encoding_combo)
 
         self.reload_btn = QPushButton("重新加载")
+        self.reload_btn.setObjectName("primaryButton")
         self.reload_btn.clicked.connect(self.reload_logs)
         encoding_layout.addWidget(self.reload_btn)
 
@@ -86,17 +93,21 @@ class LogViewer(QDialog):
 
         # 顶部按钮
         self.top_btn = QPushButton("顶部")
+        self.top_btn.setObjectName("secondaryButton")
         self.top_btn.clicked.connect(self.go_to_top)
         btn_layout.addWidget(self.top_btn)
 
         # 底部按钮
         self.bottom_btn = QPushButton("底部")
+        self.bottom_btn.setObjectName("secondaryButton")
         self.bottom_btn.clicked.connect(self.go_to_bottom)
         btn_layout.addWidget(self.bottom_btn)
 
+        btn_layout.addStretch()
 
         # 关闭按钮
         close_btn = QPushButton("关闭")
+        close_btn.setObjectName("secondaryButton")
         close_btn.clicked.connect(self.accept)
         btn_layout.addWidget(close_btn)
 

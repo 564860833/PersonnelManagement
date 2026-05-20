@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout, QCheckBox, QDialogButtonBox,
     QScrollArea, QAbstractItemView, QGridLayout, QSizePolicy
 )
-from PyQt5.QtCore import Qt, QEvent, QSignalBlocker, pyqtSignal
+from PyQt5.QtCore import Qt, QSignalBlocker, pyqtSignal
 from PyQt5.QtGui import QColor, QFont
 from core.database import Database
 from metadata.constants import (
@@ -29,6 +29,8 @@ from metadata.query_options import (
 from ui.styles import (
     ANALYSIS_FIELD_LABEL_STYLE,
     CARD_STYLE,
+    DIALOG_BASE_STYLE,
+    DIALOG_BUTTON_STYLE,
     PAGE_BACKGROUND_STYLE,
     PAGINATION_BUTTON_STYLE,
     QUERY_FORM_CONTROL_STYLE,
@@ -85,13 +87,18 @@ class MonthRangeDialog(QDialog):
 
         button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         clear_btn = button_box.addButton("清空", QDialogButtonBox.ResetRole)
+        clear_btn.setObjectName("secondaryButton")
         clear_btn.clicked.connect(self.clear_and_accept)
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
         self.ok_button = button_box.button(QDialogButtonBox.Ok)
+        self.ok_button.setObjectName("primaryButton")
+        cancel_button = button_box.button(QDialogButtonBox.Cancel)
+        if cancel_button is not None:
+            cancel_button.setObjectName("secondaryButton")
         layout.addWidget(button_box)
 
-        self.setStyleSheet(QUERY_FORM_CONTROL_STYLE)
+        self.setStyleSheet(DIALOG_BASE_STYLE + DIALOG_BUTTON_STYLE + QUERY_FORM_CONTROL_STYLE)
 
     def initial_panel_years(self):
         start_year = self.year_part(self._selected_start)
@@ -455,6 +462,9 @@ class GradeSelectionDialog(QDialog):
 
     def setup_ui(self):
         layout = QVBoxLayout()
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+        self.setStyleSheet(DIALOG_BASE_STYLE + DIALOG_BUTTON_STYLE)
 
         # 滚动区域
         scroll = QScrollArea()
@@ -487,6 +497,12 @@ class GradeSelectionDialog(QDialog):
         button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
+        ok_button = button_box.button(QDialogButtonBox.Ok)
+        cancel_button = button_box.button(QDialogButtonBox.Cancel)
+        if ok_button is not None:
+            ok_button.setObjectName("primaryButton")
+        if cancel_button is not None:
+            cancel_button.setObjectName("secondaryButton")
         layout.addWidget(button_box)
 
         self.setLayout(layout)
@@ -538,6 +554,9 @@ class ColumnSelectionDialog(QDialog):
 
     def setup_ui(self):
         layout = QVBoxLayout()
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+        self.setStyleSheet(DIALOG_BASE_STYLE + DIALOG_BUTTON_STYLE)
 
         # 提示标签
         label = QLabel("请选择需要让 AI 分析的数据列（默认全选）：")
@@ -554,6 +573,8 @@ class ColumnSelectionDialog(QDialog):
         btn_layout = QHBoxLayout()
         select_all_btn = QPushButton("全选")
         deselect_all_btn = QPushButton("全不选")
+        select_all_btn.setObjectName("secondaryButton")
+        deselect_all_btn.setObjectName("secondaryButton")
         select_all_btn.clicked.connect(self.select_all)
         deselect_all_btn.clicked.connect(self.deselect_all)
         btn_layout.addWidget(select_all_btn)
@@ -576,6 +597,12 @@ class ColumnSelectionDialog(QDialog):
         button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
+        ok_button = button_box.button(QDialogButtonBox.Ok)
+        cancel_button = button_box.button(QDialogButtonBox.Cancel)
+        if ok_button is not None:
+            ok_button.setObjectName("primaryButton")
+        if cancel_button is not None:
+            cancel_button.setObjectName("secondaryButton")
         layout.addWidget(button_box)
 
         self.setLayout(layout)
@@ -783,12 +810,9 @@ class QueryTab(QWidget):
         self.result_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         # 禁用排序功能，防止数据错乱
         self.result_table.setSortingEnabled(False)
-        # 禁用行选择功能
-        self.result_table.setSelectionMode(QAbstractItemView.NoSelection)
-        self.result_table.setMouseTracking(True)
-        self.result_table.viewport().setMouseTracking(True)
-        self.result_table.entered.connect(self.on_result_table_entered)
-        self.result_table.viewport().installEventFilter(self)
+        # 单击后选中整行，避免鼠标经过时频繁改变高亮行
+        self.result_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.result_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.result_table.setStyleSheet(RESULT_TABLE_STYLE)
         self.result_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         result_layout.addWidget(self.result_table)
@@ -848,22 +872,6 @@ class QueryTab(QWidget):
         shadow.setOffset(0, 2)
         shadow.setColor(QColor(0, 0, 0, 28))
         widget.setGraphicsEffect(shadow)
-
-    def on_result_table_entered(self, index):
-        """Highlight the full row under the cursor."""
-        if self.result_model is None:
-            return
-        self.result_model.set_hovered_row(index.row() if index.isValid() else None)
-
-    def eventFilter(self, watched, event):
-        if (
-            hasattr(self, "result_table")
-            and watched is self.result_table.viewport()
-            and event.type() == QEvent.Leave
-            and self.result_model is not None
-        ):
-            self.result_model.set_hovered_row(None)
-        return super().eventFilter(watched, event)
 
     def query_state_widgets(self):
         """返回需要保留输入状态的查询控件。"""

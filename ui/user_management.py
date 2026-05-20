@@ -5,6 +5,7 @@ from PyQt5.QtCore import Qt
 import logging
 import sqlite3
 from metadata.constants import TABLE_LABELS
+from ui.styles import DIALOG_BASE_STYLE, DIALOG_BUTTON_STYLE, RESULT_TABLE_STYLE
 
 logger = logging.getLogger('UserMgr')
 
@@ -14,15 +15,21 @@ class AddUserDialog(QDialog):
         super().__init__()
         self.db = db
         self.setWindowTitle("添加用户账号")
-        self.setFixedSize(400, 400)
+        self.setMinimumSize(420, 480)
         self.setup_ui()
 
     def setup_ui(self):
         layout = QVBoxLayout()
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(12)
+        self.setStyleSheet(DIALOG_BASE_STYLE + DIALOG_BUTTON_STYLE)
 
         # 用户名输入
         username_layout = QHBoxLayout()
-        username_layout.addWidget(QLabel("用户名:"))
+        username_label = QLabel("用户名")
+        username_label.setObjectName("fieldLabel")
+        username_label.setMinimumWidth(88)
+        username_layout.addWidget(username_label)
         self.username_input = QLineEdit()
         self.username_input.setPlaceholderText("输入用户名")
         username_layout.addWidget(self.username_input)
@@ -30,7 +37,10 @@ class AddUserDialog(QDialog):
 
         # 密码输入
         password_layout = QHBoxLayout()
-        password_layout.addWidget(QLabel("密码:"))
+        password_label = QLabel("密码")
+        password_label.setObjectName("fieldLabel")
+        password_label.setMinimumWidth(88)
+        password_layout.addWidget(password_label)
         self.password_input = QLineEdit()
         self.password_input.setPlaceholderText("输入密码")
         self.password_input.setEchoMode(QLineEdit.Password)
@@ -39,7 +49,10 @@ class AddUserDialog(QDialog):
 
         # 确认密码
         confirm_layout = QHBoxLayout()
-        confirm_layout.addWidget(QLabel("确认密码:"))
+        confirm_label = QLabel("确认密码")
+        confirm_label.setObjectName("fieldLabel")
+        confirm_label.setMinimumWidth(88)
+        confirm_layout.addWidget(confirm_label)
         self.confirm_input = QLineEdit()
         self.confirm_input.setPlaceholderText("再次输入密码")
         self.confirm_input.setEchoMode(QLineEdit.Password)
@@ -62,8 +75,10 @@ class AddUserDialog(QDialog):
         button_layout = QHBoxLayout()
         button_layout.addStretch()
         ok_btn = QPushButton("确定")
+        ok_btn.setObjectName("primaryButton")
         ok_btn.clicked.connect(self.on_ok)
         cancel_btn = QPushButton("取消")
+        cancel_btn.setObjectName("secondaryButton")
         cancel_btn.clicked.connect(self.reject)
         button_layout.addWidget(ok_btn)
         button_layout.addWidget(cancel_btn)
@@ -116,12 +131,15 @@ class UserManagementDialog(QDialog):
         super().__init__()
         self.db = db
         self.setWindowTitle("用户账号管理")
-        self.setFixedSize(850, 400)
+        self.setMinimumSize(900, 480)
         self.setup_ui()
         self.load_users()
 
     def setup_ui(self):
         layout = QVBoxLayout()
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+        self.setStyleSheet(DIALOG_BASE_STYLE + DIALOG_BUTTON_STYLE)
 
         # 用户列表
         self.user_table = QTableWidget()
@@ -129,24 +147,31 @@ class UserManagementDialog(QDialog):
         self.user_table.setHorizontalHeaderLabels(["用户名"] + [f"{label}表" for label in TABLE_LABELS.values()])
         self.user_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.user_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.user_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.user_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.user_table.setAlternatingRowColors(True)
+        self.user_table.setStyleSheet(RESULT_TABLE_STYLE)
         layout.addWidget(self.user_table)
 
         # 按钮区域
         btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
 
         # 修改权限按钮
         self.edit_btn = QPushButton("修改权限")
+        self.edit_btn.setObjectName("primaryButton")
         self.edit_btn.clicked.connect(self.edit_permissions)
         btn_layout.addWidget(self.edit_btn)
 
         # 删除用户按钮
         self.delete_btn = QPushButton("删除用户")
+        self.delete_btn.setObjectName("dangerButton")
         self.delete_btn.clicked.connect(self.delete_user)
         btn_layout.addWidget(self.delete_btn)
 
         # 关闭按钮
         self.close_btn = QPushButton("关闭")
+        self.close_btn.setObjectName("secondaryButton")
         self.close_btn.clicked.connect(self.reject)
         btn_layout.addWidget(self.close_btn)
 
@@ -237,10 +262,14 @@ class EditPermissionsDialog(QDialog):
         self.username = username
         self.permissions = permissions
         self.setWindowTitle(f"编辑权限 - {username}")
+        self.setMinimumSize(420, 420)
         self.setup_ui()
 
     def setup_ui(self):
         layout = QVBoxLayout()
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(12)
+        self.setStyleSheet(DIALOG_BASE_STYLE + DIALOG_BUTTON_STYLE)
 
         # 权限设置组
         permissions_group = QGroupBox("表格访问权限")
@@ -260,10 +289,12 @@ class EditPermissionsDialog(QDialog):
         button_layout.addStretch()
 
         save_btn = QPushButton("保存")
+        save_btn.setObjectName("primaryButton")
         save_btn.clicked.connect(self.save_permissions)
         button_layout.addWidget(save_btn)
 
         cancel_btn = QPushButton("取消")
+        cancel_btn.setObjectName("secondaryButton")
         cancel_btn.clicked.connect(self.reject)
         button_layout.addWidget(cancel_btn)
 
