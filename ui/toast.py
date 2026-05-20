@@ -5,8 +5,8 @@ from PyQt5.QtWidgets import QApplication, QFrame, QGraphicsOpacityEffect, QHBoxL
 TOAST_STYLES = {
     "success": """
         QFrame {
-            background-color: #2f7d4f;
-            border: 1px solid #276b43;
+            background-color: #1E5AA8;
+            border: 1px solid #174A8B;
             border-radius: 8px;
         }
         QLabel {
@@ -16,8 +16,8 @@ TOAST_STYLES = {
     """,
     "info": """
         QFrame {
-            background-color: #1f6fb2;
-            border: 1px solid #185f9a;
+            background-color: #1E5AA8;
+            border: 1px solid #174A8B;
             border-radius: 8px;
         }
         QLabel {

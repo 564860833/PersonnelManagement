@@ -1,8 +1,14 @@
 import re
 
 from PyQt5.QtCore import QAbstractTableModel, QModelIndex, Qt
+from PyQt5.QtGui import QColor
 
 from metadata.constants import TABLE_DATE_FIELDS
+from ui.styles import (
+    TABLE_ROW_ALTERNATE_BACKGROUND,
+    TABLE_ROW_BACKGROUND,
+    TABLE_ROW_HOVER_BACKGROUND,
+)
 
 
 class ResultTableModel(QAbstractTableModel):
@@ -15,6 +21,7 @@ class ResultTableModel(QAbstractTableModel):
         self.headers = []
         self.table_name = ""
         self.start_index = 0
+        self.hovered_row = None
 
     def set_data(self, rows, table_name: str, fields, headers, start_index: int = 0):
         self.beginResetModel()
@@ -23,6 +30,7 @@ class ResultTableModel(QAbstractTableModel):
         self.fields = fields or []
         self.headers = headers or []
         self.start_index = start_index
+        self.hovered_row = None
         self.endResetModel()
 
     def clear(self):
@@ -59,7 +67,29 @@ class ResultTableModel(QAbstractTableModel):
         if role == Qt.ToolTipRole:
             return str(value)
 
+        if role == Qt.BackgroundRole:
+            if index.row() == self.hovered_row:
+                return QColor(TABLE_ROW_HOVER_BACKGROUND)
+            if index.row() % 2 == 1:
+                return QColor(TABLE_ROW_ALTERNATE_BACKGROUND)
+            return QColor(TABLE_ROW_BACKGROUND)
+
         return None
+
+    def set_hovered_row(self, row):
+        """Refresh the previous and current hover rows."""
+        if row == self.hovered_row:
+            return
+
+        previous_row = self.hovered_row
+        self.hovered_row = row if row is not None and row >= 0 else None
+
+        for changed_row in (previous_row, self.hovered_row):
+            if changed_row is None or changed_row >= len(self.rows) or not self.fields:
+                continue
+            left = self.index(changed_row, 0)
+            right = self.index(changed_row, len(self.fields) - 1)
+            self.dataChanged.emit(left, right, [Qt.BackgroundRole])
 
     def headerData(self, section, orientation, role=Qt.DisplayRole):
         if role != Qt.DisplayRole:

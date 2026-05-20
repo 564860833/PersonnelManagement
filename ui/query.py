@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout, QCheckBox, QDialogButtonBox,
     QScrollArea, QAbstractItemView, QGridLayout, QSizePolicy
 )
-from PyQt5.QtCore import Qt, QSignalBlocker, pyqtSignal
+from PyQt5.QtCore import Qt, QEvent, QSignalBlocker, pyqtSignal
 from PyQt5.QtGui import QFont
 from core.database import Database
 from metadata.constants import (
@@ -781,6 +781,10 @@ class QueryTab(QWidget):
         self.result_table.setSortingEnabled(False)
         # 禁用行选择功能
         self.result_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.result_table.setMouseTracking(True)
+        self.result_table.viewport().setMouseTracking(True)
+        self.result_table.entered.connect(self.on_result_table_entered)
+        self.result_table.viewport().installEventFilter(self)
         self.result_table.setStyleSheet(RESULT_TABLE_STYLE)
         self.result_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         result_layout.addWidget(self.result_table)
@@ -808,6 +812,22 @@ class QueryTab(QWidget):
         result_group.setLayout(result_layout)
         main_layout.addWidget(result_group)
         self.setLayout(main_layout)
+
+    def on_result_table_entered(self, index):
+        """Highlight the full row under the cursor."""
+        if self.result_model is None:
+            return
+        self.result_model.set_hovered_row(index.row() if index.isValid() else None)
+
+    def eventFilter(self, watched, event):
+        if (
+            hasattr(self, "result_table")
+            and watched is self.result_table.viewport()
+            and event.type() == QEvent.Leave
+            and self.result_model is not None
+        ):
+            self.result_model.set_hovered_row(None)
+        return super().eventFilter(watched, event)
 
     def query_state_widgets(self):
         """返回需要保留输入状态的查询控件。"""

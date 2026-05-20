@@ -1,5 +1,14 @@
 """Shared UI styles."""
 
+THEME_PRIMARY = "#1E5AA8"
+THEME_PRIMARY_HOVER = "#174A8B"
+THEME_LIGHT = "#EAF2FB"
+THEME_BORDER = "#8BB6E8"
+
+TABLE_ROW_BACKGROUND = "#FFFFFF"
+TABLE_ROW_ALTERNATE_BACKGROUND = "#F7F9FC"
+TABLE_ROW_HOVER_BACKGROUND = THEME_LIGHT
+
 BUTTON_BASE = """
 QPushButton {
     border-radius: 4px;
@@ -15,13 +24,13 @@ QPushButton:disabled {
 BUTTON_STYLES = {
     "primary": """
         QPushButton {
-            background-color: #2f7d4f;
+            background-color: #1E5AA8;
             color: white;
             font-weight: bold;
-            border: 1px solid #2f7d4f;
+            border: 1px solid #1E5AA8;
         }
         QPushButton:hover {
-            background-color: #276b43;
+            background-color: #174A8B;
         }
     """,
     "secondary": """
@@ -36,35 +45,35 @@ BUTTON_STYLES = {
     """,
     "info": """
         QPushButton {
-            background-color: #1f6fb2;
+            background-color: #1E5AA8;
             color: white;
             font-weight: bold;
-            border: 1px solid #1f6fb2;
+            border: 1px solid #1E5AA8;
         }
         QPushButton:hover {
-            background-color: #185f9a;
+            background-color: #174A8B;
         }
     """,
     "accent": """
         QPushButton {
-            background-color: #7a4ea3;
+            background-color: #1E5AA8;
             color: white;
             font-weight: bold;
-            border: 1px solid #7a4ea3;
+            border: 1px solid #1E5AA8;
         }
         QPushButton:hover {
-            background-color: #68438b;
+            background-color: #174A8B;
         }
     """,
     "table_enabled": """
         QPushButton {
-            background-color: #2f7d4f;
+            background-color: #1E5AA8;
             color: white;
-            border: 1px solid #2f7d4f;
+            border: 1px solid #1E5AA8;
             padding: 6px;
         }
         QPushButton:hover {
-            background-color: #276b43;
+            background-color: #174A8B;
         }
     """,
     "table_disabled": """
@@ -94,8 +103,8 @@ QLineEdit, QComboBox {
     color: #222;
 }
 QLineEdit:focus, QComboBox:focus {
-    border: 1px solid #74b58b;
-    background-color: #fbfffc;
+    border: 1px solid #8BB6E8;
+    background-color: #F7FBFF;
 }
 QLineEdit:read-only {
     background-color: #f9fafb;
@@ -130,8 +139,8 @@ QPushButton#monthYearButton {
     font-weight: bold;
 }
 QPushButton#monthYearButton:hover {
-    background-color: #edf7f1;
-    border-color: #b7d9c4;
+    background-color: #EAF2FB;
+    border-color: #8BB6E8;
 }
 QPushButton#monthNavButton {
     min-height: 0;
@@ -142,8 +151,8 @@ QPushButton#monthNavButton {
     color: #24292f;
 }
 QPushButton#monthNavButton:hover {
-    background-color: #edf7f1;
-    border-color: #74b58b;
+    background-color: #EAF2FB;
+    border-color: #8BB6E8;
 }
 QPushButton#monthNavButton:disabled {
     background-color: #f6f8fa;
@@ -159,19 +168,19 @@ QPushButton#monthCell {
     color: #24292f;
 }
 QPushButton#monthCell:hover {
-    background-color: #edf7f1;
-    border-color: #74b58b;
+    background-color: #EAF2FB;
+    border-color: #8BB6E8;
 }
 QPushButton#monthCell[state="selected"] {
-    background-color: #2f7d4f;
-    border-color: #2f7d4f;
+    background-color: #1E5AA8;
+    border-color: #1E5AA8;
     color: #ffffff;
     font-weight: bold;
 }
 QPushButton#monthCell[state="range"] {
-    background-color: #e8f4ed;
-    border-color: #b7d9c4;
-    color: #1f5f39;
+    background-color: #EAF2FB;
+    border-color: #8BB6E8;
+    color: #174A8B;
 }
 QPushButton#monthCell:disabled {
     background-color: #f6f8fa;
@@ -187,19 +196,19 @@ QPushButton#yearCell {
     color: #24292f;
 }
 QPushButton#yearCell:hover {
-    background-color: #edf7f1;
-    border-color: #74b58b;
+    background-color: #EAF2FB;
+    border-color: #8BB6E8;
 }
 QPushButton#yearCell[state="selected"] {
-    background-color: #2f7d4f;
-    border-color: #2f7d4f;
+    background-color: #1E5AA8;
+    border-color: #1E5AA8;
     color: #ffffff;
     font-weight: bold;
 }
 QPushButton#yearCell[state="range"] {
-    background-color: #e8f4ed;
-    border-color: #b7d9c4;
-    color: #1f5f39;
+    background-color: #EAF2FB;
+    border-color: #8BB6E8;
+    color: #174A8B;
 }
 QPushButton#yearCell:disabled {
     background-color: #f6f8fa;
@@ -211,13 +220,15 @@ QPushButton#yearCell:disabled {
 RESULT_TABLE_STYLE = """
 QTableWidget, QTableView {
     gridline-color: #d8d8d8;
-    selection-background-color: #dfefff;
+    selection-background-color: #EAF2FB;
+    alternate-background-color: #F7F9FC;
+    background-color: #FFFFFF;
 }
 QHeaderView::section {
-    background-color: #f3f4f6;
-    color: #222;
+    background-color: #EAF2FB;
+    color: #174A8B;
     padding: 6px;
-    border: 1px solid #d4d7dc;
+    border: 1px solid #8BB6E8;
     font-weight: bold;
 }
 """
