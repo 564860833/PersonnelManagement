@@ -4,13 +4,13 @@ import logging
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QLineEdit, QPushButton, QTableView,
-    QComboBox, QGroupBox,
+    QComboBox, QFrame, QGraphicsDropShadowEffect,
     QMessageBox, QHeaderView, QDialog,
     QVBoxLayout, QCheckBox, QDialogButtonBox,
     QScrollArea, QAbstractItemView, QGridLayout, QSizePolicy
 )
 from PyQt5.QtCore import Qt, QEvent, QSignalBlocker, pyqtSignal
-from PyQt5.QtGui import QFont
+from PyQt5.QtGui import QColor, QFont
 from core.database import Database
 from metadata.constants import (
     TABLE_LABELS,
@@ -28,7 +28,9 @@ from metadata.query_options import (
 )
 from ui.styles import (
     ANALYSIS_FIELD_LABEL_STYLE,
+    CARD_STYLE,
     COMPACT_BUTTON_STYLE,
+    PAGE_BACKGROUND_STYLE,
     QUERY_FORM_CONTROL_STYLE,
     RESULT_TABLE_STYLE,
     button_style,
@@ -621,17 +623,19 @@ class QueryTab(QWidget):
 
     def setup_ui(self):
         """设置用户界面 - 优化版"""
-        main_layout = QVBoxLayout()
-        main_layout.setSpacing(10)
-        main_layout.setContentsMargins(12, 12, 12, 12)
+        self.setObjectName("queryPage")
+        self.setStyleSheet(PAGE_BACKGROUND_STYLE)
 
-        # 查询条件组 - 三列顶部标签表单
-        condition_group = QGroupBox("查询条件")
-        condition_group.setStyleSheet(QUERY_FORM_CONTROL_STYLE)
+        main_layout = QVBoxLayout()
+        main_layout.setSpacing(16)
+        main_layout.setContentsMargins(16, 16, 16, 16)
+
+        # 条件区 - 三列顶部标签表单
+        condition_group, condition_layout = self.create_card()
         grid_layout = QGridLayout()
         grid_layout.setHorizontalSpacing(18)
         grid_layout.setVerticalSpacing(12)
-        grid_layout.setContentsMargins(12, 16, 12, 12)
+        grid_layout.setContentsMargins(0, 0, 0, 0)
         for column in range(3):
             grid_layout.setColumnStretch(column, 1)
 
@@ -743,15 +747,15 @@ class QueryTab(QWidget):
 
         grid_layout.addLayout(button_layout, 2, 0, 1, 3)
 
-        condition_group.setLayout(grid_layout)
+        condition_layout.addLayout(grid_layout)
         main_layout.addWidget(condition_group)
 
-        # 查询结果区域
-        result_group = QGroupBox("查询结果")
-        result_layout = QVBoxLayout()
+        # 结果区域
+        result_group, result_layout = self.create_card()
 
         # 查看按钮
         button_layout = QHBoxLayout()
+        button_layout.setContentsMargins(0, 0, 0, 0)
         self.table_buttons = {}
 
         # 根据统一表配置生成查看按钮
@@ -812,6 +816,26 @@ class QueryTab(QWidget):
         result_group.setLayout(result_layout)
         main_layout.addWidget(result_group)
         self.setLayout(main_layout)
+
+    def create_card(self):
+        """Create a borderless white card section."""
+        card = QFrame()
+        card.setObjectName("sectionCard")
+        card.setStyleSheet(CARD_STYLE + QUERY_FORM_CONTROL_STYLE)
+        self.apply_card_shadow(card)
+
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        return card, layout
+
+    def apply_card_shadow(self, widget: QWidget):
+        shadow = QGraphicsDropShadowEffect(widget)
+        shadow.setBlurRadius(14)
+        shadow.setOffset(0, 2)
+        shadow.setColor(QColor(0, 0, 0, 28))
+        widget.setGraphicsEffect(shadow)
 
     def on_result_table_entered(self, index):
         """Highlight the full row under the cursor."""

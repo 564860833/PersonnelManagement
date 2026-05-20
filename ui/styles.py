@@ -9,6 +9,20 @@ TABLE_ROW_BACKGROUND = "#FFFFFF"
 TABLE_ROW_ALTERNATE_BACKGROUND = "#F7F9FC"
 TABLE_ROW_HOVER_BACKGROUND = THEME_LIGHT
 
+PAGE_BACKGROUND_STYLE = """
+QWidget#queryPage {
+    background-color: #F0F2F5;
+}
+"""
+
+CARD_STYLE = """
+QFrame#sectionCard {
+    background-color: #FFFFFF;
+    border: none;
+    border-radius: 8px;
+}
+"""
+
 BUTTON_BASE = """
 QPushButton {
     border-radius: 4px;

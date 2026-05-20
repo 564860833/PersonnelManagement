@@ -81,6 +81,8 @@ class MainWindow(QMainWindow):
                     no_permission_label.setStyleSheet(NO_PERMISSION_LABEL_STYLE)
                     self.tab_widget.addTab(no_permission_label, "提示")
 
+            self.tab_widget.tabBar().setVisible(self.tab_widget.count() > 1)
+
             self.show()
 
             # 添加权限日志输出
