@@ -1,4 +1,5 @@
 import logging
+import os
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
@@ -23,7 +24,8 @@ class MainWindow(QMainWindow):
         self.db = db
         self.username = username
         self.query_tab = None  # 添加这一行
-
+        self.last_dir = ""
+        self._last_tab_index = -1
 
         # 确保权限字典不为空
         self.permissions = permissions or DEFAULT_PERMISSIONS.copy()
@@ -59,6 +61,7 @@ class MainWindow(QMainWindow):
 
             # 选项卡
             self.tab_widget = QTabWidget()
+            self.tab_widget.currentChanged.connect(self.on_tab_changed)
             self.setCentralWidget(self.tab_widget)
 
             # 根据权限添加查询标签页
@@ -248,6 +251,33 @@ class MainWindow(QMainWindow):
         if self.query_tab is not None and hasattr(self.query_tab, 'clear_results'):
             self.query_tab.clear_results()
 
+    def on_tab_changed(self, index: int):
+        """切换主选项卡时保留查询条件。"""
+        if self.query_tab is None:
+            self._last_tab_index = index
+            return
+
+        query_index = self.tab_widget.indexOf(self.query_tab)
+        if self._last_tab_index == query_index and hasattr(self.query_tab, 'save_query_state'):
+            self.query_tab.save_query_state()
+
+        if index == query_index and hasattr(self.query_tab, 'restore_query_state'):
+            self.query_tab.restore_query_state()
+
+        self._last_tab_index = index
+
+    def get_last_dialog_dir(self) -> str:
+        """获取文件选择框可用的初始目录。"""
+        if self.last_dir and os.path.isdir(self.last_dir):
+            return self.last_dir
+        return ""
+
+    def remember_last_dir(self, file_path: str):
+        """记录用户最近一次选择文件所在目录。"""
+        selected_dir = os.path.dirname(file_path)
+        if selected_dir:
+            self.last_dir = selected_dir
+
     def confirm_import_mode(self, table_name: str, duplicate_keys: list) -> str:
         """当本次导入记录与数据库已有记录重复时，确认导入方式。"""
         if not duplicate_keys:
@@ -298,10 +328,11 @@ class MainWindow(QMainWindow):
 
         file_path, _ = QFileDialog.getOpenFileName(
             self, f"选择{TABLE_LABELS[table_name]}数据文件",
-            "", "Excel Files (*.xlsx *.xls)"
+            self.get_last_dialog_dir(), "Excel Files (*.xlsx *.xls)"
         )
         if not file_path:
             return
+        self.remember_last_dir(file_path)
 
         try:
             preview_success, preview_message, preview_records = prepare_import_records(file_path, self.db, table_name)

@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout, QCheckBox, QDialogButtonBox,
     QScrollArea, QAbstractItemView, QGridLayout
 )
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QSignalBlocker
 from PyQt5.QtGui import QFont, QIntValidator
 from core.database import Database
 from metadata.constants import (
@@ -40,10 +40,11 @@ logger = logging.getLogger('QueryTab')
 
 # 职级对话框类
 class GradeSelectionDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, selected_grades=None):
         super().__init__(parent)
         self.setWindowTitle("选择职级/等级")
         self.setMinimumSize(400, 500)
+        self.initial_grades = set(selected_grades or [])
         self.setup_ui()
 
     def setup_ui(self):
@@ -57,7 +58,6 @@ class GradeSelectionDialog(QDialog):
 
         # 添加"全部"选项
         self.all_check = QCheckBox("全部")
-        self.all_check.stateChanged.connect(self.on_all_selected)
         scroll_layout.addWidget(self.all_check)
 
         self.grade_checks = []
@@ -65,9 +65,14 @@ class GradeSelectionDialog(QDialog):
         # 添加复选框
         for grade in GRADE_OPTIONS:
             check = QCheckBox(grade)
+            check.setChecked(grade in self.initial_grades)
             check.stateChanged.connect(self.on_grade_selected)
             self.grade_checks.append(check)
             scroll_layout.addWidget(check)
+
+        if self.grade_checks and all(check.isChecked() for check in self.grade_checks):
+            self.all_check.setChecked(True)
+        self.all_check.stateChanged.connect(self.on_all_selected)
 
         scroll.setWidget(content)
         layout.addWidget(scroll)
@@ -197,8 +202,12 @@ class QueryTab(QWidget):
         self.current_results = []  # 保存当前基础信息查询结果
         self.current_results_dict = {}  # 保存完整查询结果
         self.current_table_name = 'base_info'
+        self._query_state = {}
+        self._restoring_query_state = False
 
         self.setup_ui()
+        self.bind_query_state_events()
+        self.save_query_state()
         logger.info("查询标签页已初始化")
         logger.info(
             f"用户权限: base_info={self.permissions['base_info']}, rewards={self.permissions['rewards']}, family={self.permissions['family']}, resume={self.permissions['resume']}")
@@ -409,19 +418,100 @@ class QueryTab(QWidget):
         main_layout.addWidget(result_group)
         self.setLayout(main_layout)
 
+    def query_state_widgets(self):
+        """返回需要保留输入状态的查询控件。"""
+        return [
+            self.name_input,
+            self.grade_display,
+            self.position_combo,
+            self.birth_start_year,
+            self.birth_start_month,
+            self.birth_end_year,
+            self.birth_end_month,
+            self.education_combo,
+            self.parttime_combo,
+        ]
+
+    def bind_query_state_events(self):
+        """让查询条件变化时自动写入内存状态。"""
+        for widget in self.query_state_widgets():
+            if isinstance(widget, QLineEdit):
+                widget.textChanged.connect(self.save_query_state)
+            elif isinstance(widget, QComboBox):
+                widget.currentIndexChanged.connect(self.save_query_state)
+
+    def get_query_state(self) -> dict:
+        """读取当前查询条件输入状态。"""
+        return {
+            "name": self.name_input.text(),
+            "grades": self.grade_display.text(),
+            "position": self.position_combo.currentData() or "",
+            "birth_start_year": self.birth_start_year.text(),
+            "birth_start_month": self.birth_start_month.currentText(),
+            "birth_end_year": self.birth_end_year.text(),
+            "birth_end_month": self.birth_end_month.currentText(),
+            "education": self.education_combo.currentData() or "",
+            "parttime_education": self.parttime_combo.currentData() or "",
+        }
+
+    def save_query_state(self, *_):
+        """保存查询条件，供切换选项卡后恢复。"""
+        if self._restoring_query_state:
+            return
+        self._query_state = self.get_query_state()
+
+    def set_combo_by_data(self, combo: QComboBox, value):
+        index = combo.findData(value)
+        combo.setCurrentIndex(index if index >= 0 else 0)
+
+    def set_combo_by_text(self, combo: QComboBox, text: str):
+        index = combo.findText(text)
+        combo.setCurrentIndex(index if index >= 0 else 0)
+
+    def restore_query_state(self):
+        """恢复最近一次保存的查询条件。"""
+        if not self._query_state:
+            return
+
+        self._restoring_query_state = True
+        blockers = [QSignalBlocker(widget) for widget in self.query_state_widgets()]
+        try:
+            self.name_input.setText(self._query_state.get("name", ""))
+            self.grade_display.setText(self._query_state.get("grades", ""))
+            self.set_combo_by_data(self.position_combo, self._query_state.get("position", ""))
+            self.birth_start_year.setText(self._query_state.get("birth_start_year", ""))
+            self.set_combo_by_text(self.birth_start_month, self._query_state.get("birth_start_month", "不限"))
+            self.birth_end_year.setText(self._query_state.get("birth_end_year", ""))
+            self.set_combo_by_text(self.birth_end_month, self._query_state.get("birth_end_month", "不限"))
+            self.set_combo_by_data(self.education_combo, self._query_state.get("education", ""))
+            self.set_combo_by_data(self.parttime_combo, self._query_state.get("parttime_education", ""))
+        finally:
+            del blockers
+            self._restoring_query_state = False
+        self.save_query_state()
+
+    def hideEvent(self, event):
+        self.save_query_state()
+        super().hideEvent(event)
+
+    def showEvent(self, event):
+        self.restore_query_state()
+        super().showEvent(event)
+
     def get_education_keywords(self, level: str) -> list:
         """将界面选项映射到数据库关键词"""
         return EDUCATION_KEYWORDS.get(level, [])
 
     def select_grades(self):
         """弹出职级选择对话框"""
-        dlg = GradeSelectionDialog(self)
+        dlg = GradeSelectionDialog(self, self.get_selected_grades())
         if dlg.exec_() == QDialog.Accepted:
             selected = dlg.selected_grades()
             if selected:
                 self.grade_display.setText(", ".join(selected))
             else:
                 self.grade_display.clear()
+            self.save_query_state()
 
     def clear_conditions(self):
         """清空查询条件"""
@@ -445,6 +535,7 @@ class QueryTab(QWidget):
         # 重置学历下拉框
         self.education_combo.setCurrentIndex(0)
         self.parttime_combo.setCurrentIndex(0)
+        self.save_query_state()
 
     def update_table_buttons(self, has_results: bool):
         """按查询结果和权限刷新表切换按钮状态。"""
