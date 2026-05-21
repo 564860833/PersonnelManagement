@@ -1,5 +1,6 @@
 """Helpers for using an app-local Ollama models directory."""
 
+import atexit
 import logging
 import os
 import shutil
@@ -15,7 +16,11 @@ import requests
 
 logger = logging.getLogger("OllamaManager")
 
-DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
+APP_OLLAMA_HOST = "127.0.0.1:11435"
+APP_OLLAMA_URL = f"http://{APP_OLLAMA_HOST}"
+APP_OLLAMA_RUNTIME_DIR = "ollama"
+
+_started_process: Optional[subprocess.Popen] = None
 
 
 @dataclass
@@ -54,15 +59,15 @@ def configure_local_models_env() -> Optional[Path]:
     if current != models_path:
         os.environ["OLLAMA_MODELS"] = models_path
         logger.info("已设置 OLLAMA_MODELS=%s", models_path)
+    os.environ["OLLAMA_HOST"] = APP_OLLAMA_HOST
     return models_dir
 
 
 def ensure_ollama_ready(
     start_if_needed: bool = True,
     timeout: float = 8.0,
-    restart_empty_service: bool = True,
 ) -> OllamaStatus:
-    """Point Ollama at app-local models and start it if the API is unavailable."""
+    """Start or reuse the app-dedicated Ollama service on a fixed local port."""
     models_dir = configure_local_models_env()
     local_model_names = list_local_model_names(models_dir) if models_dir else []
     executable = find_ollama_executable()
@@ -70,18 +75,6 @@ def ensure_ollama_ready(
     available, service_models = fetch_ollama_models(timeout=2)
     if available:
         status = _build_available_status(service_models, models_dir, local_model_names, executable, started=False)
-        if (
-            restart_empty_service
-            and models_dir
-            and local_model_names
-            and executable
-            and not service_models
-        ):
-            logger.info("Ollama 已运行但模型列表为空，尝试用程序目录 models 重启 Ollama。")
-            if restart_ollama_with_local_models(executable, models_dir):
-                available, service_models = wait_for_ollama(timeout=timeout)
-                if available:
-                    return _build_available_status(service_models, models_dir, local_model_names, executable, started=True)
         return status
 
     started = False
@@ -93,11 +86,11 @@ def ensure_ollama_ready(
                 return _build_available_status(service_models, models_dir, local_model_names, executable, started=True)
 
     if not executable:
-        message = "未找到 Ollama 命令，请先安装 Ollama。"
+        message = "未找到 Ollama 运行时，请确认程序目录下存在 ollama/ollama.exe。"
     elif models_dir is None:
         message = "未检测到程序目录下可用的 models 目录。"
     else:
-        message = "无法连接到 Ollama 服务。请确认 Ollama 已安装并可启动。"
+        message = f"无法连接到程序专用 Ollama 服务 ({APP_OLLAMA_HOST})，请确认 Ollama 运行时可启动。"
 
     return OllamaStatus(
         service_available=False,
@@ -124,10 +117,7 @@ def fetch_ollama_models(timeout: float = 3.0) -> Tuple[bool, List[str]]:
 
 
 def ollama_api_url(path: str) -> str:
-    base_url = os.environ.get("OLLAMA_HOST", DEFAULT_OLLAMA_URL).strip()
-    if not base_url.startswith(("http://", "https://")):
-        base_url = "http://" + base_url
-    return base_url.rstrip("/") + "/" + path.lstrip("/")
+    return APP_OLLAMA_URL.rstrip("/") + "/" + path.lstrip("/")
 
 
 def list_local_model_names(models_dir: Optional[Path] = None) -> List[str]:
@@ -146,6 +136,15 @@ def list_local_model_names(models_dir: Optional[Path] = None) -> List[str]:
 
 
 def find_ollama_executable() -> Optional[str]:
+    app_dir = get_application_dir()
+    local_candidates = [
+        app_dir / APP_OLLAMA_RUNTIME_DIR / "ollama.exe",
+        app_dir / "ollama.exe",
+    ]
+    for candidate in local_candidates:
+        if candidate.exists():
+            return str(candidate)
+
     found = shutil.which("ollama")
     if found:
         return found
@@ -162,12 +161,15 @@ def find_ollama_executable() -> Optional[str]:
 
 
 def start_ollama_serve(executable: str, models_dir: Path) -> bool:
+    global _started_process
+
     env = os.environ.copy()
+    env["OLLAMA_HOST"] = APP_OLLAMA_HOST
     env["OLLAMA_MODELS"] = str(models_dir)
     creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
     try:
-        subprocess.Popen(
+        _started_process = subprocess.Popen(
             [executable, "serve"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -175,45 +177,33 @@ def start_ollama_serve(executable: str, models_dir: Path) -> bool:
             env=env,
             creationflags=creationflags,
         )
-        logger.info("已使用程序目录 models 启动 Ollama 服务: %s", models_dir)
+        logger.info("已启动程序专用 Ollama 服务: host=%s, models=%s", APP_OLLAMA_HOST, models_dir)
         return True
     except Exception as e:
+        _started_process = None
         logger.error("启动 Ollama 服务失败: %s", e)
         return False
 
 
-def restart_ollama_with_local_models(executable: str, models_dir: Path) -> bool:
-    stop_running_ollama()
-    time.sleep(1.0)
-    return start_ollama_serve(executable, models_dir)
+def stop_started_ollama():
+    """Stop only the Ollama process started by this application instance."""
+    global _started_process
 
-
-def stop_running_ollama():
-    if os.name == "nt":
-        for image_name in ("ollama.exe", "ollama app.exe"):
-            try:
-                subprocess.run(
-                    ["taskkill", "/IM", image_name, "/F"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    stdin=subprocess.DEVNULL,
-                    check=False,
-                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-                )
-            except Exception as e:
-                logger.debug("停止 %s 失败: %s", image_name, e)
+    process = _started_process
+    if process is None:
+        return
+    if process.poll() is not None:
+        _started_process = None
         return
 
     try:
-        subprocess.run(
-            ["pkill", "-f", "ollama"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL,
-            check=False,
-        )
+        process.terminate()
+        process.wait(timeout=5)
+        logger.info("已停止程序专用 Ollama 服务")
     except Exception as e:
-        logger.debug("停止 Ollama 进程失败: %s", e)
+        logger.debug("停止程序专用 Ollama 服务失败: %s", e)
+    finally:
+        _started_process = None
 
 
 def wait_for_ollama(timeout: float = 8.0) -> Tuple[bool, List[str]]:
@@ -241,17 +231,17 @@ def _build_available_status(
 
     if models_dir and local_model_names and missing_local_models:
         message = (
-            "Ollama 服务已运行，但未识别程序目录 models 中的模型。"
-            "请完全退出 Ollama 后重新启动本程序。"
+            f"程序专用 Ollama 服务已运行在 {APP_OLLAMA_HOST}，"
+            "但未识别程序目录 models 中的模型。请确认该端口未被其他 Ollama 占用。"
         )
         warning = message
     elif service_models:
-        message = f"Ollama 已就绪，识别到 {len(service_models)} 个模型。"
+        message = f"程序专用 Ollama 已就绪，识别到 {len(service_models)} 个模型。"
     elif models_dir:
-        message = "Ollama 服务已运行，但程序目录 models 中没有可识别模型。"
+        message = f"程序专用 Ollama 服务已运行在 {APP_OLLAMA_HOST}，但程序目录 models 中没有可识别模型。"
         warning = message
     else:
-        message = "Ollama 服务已运行，但未检测到程序目录 models。"
+        message = f"程序专用 Ollama 服务已运行在 {APP_OLLAMA_HOST}，但未检测到程序目录 models。"
 
     return OllamaStatus(
         service_available=True,
@@ -289,3 +279,6 @@ def _model_name_from_manifest(manifest: Path, manifests_dir: Path) -> Optional[s
     if namespace == "library":
         return f"{model}:{tag}"
     return f"{namespace}/{model}:{tag}"
+
+
+atexit.register(stop_started_ollama)

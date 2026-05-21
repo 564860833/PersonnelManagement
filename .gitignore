@@ -27,6 +27,8 @@ dist/
 
 # Large local model files
 models/
+ollama/
+runtime/ollama/
 
 # OS files
 Thumbs.db

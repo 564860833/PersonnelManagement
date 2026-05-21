@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QTextEdit, QLineEdit,
                              QPushButton, QLabel, QHBoxLayout, QComboBox, QGroupBox, QMessageBox)
 from PyQt5.QtCore import pyqtSignal, QObject
 from services.ai_analysis import build_analysis_context, build_direct_answer
-from services.ollama_manager import ensure_ollama_ready, fetch_ollama_models, ollama_api_url
+from services.ollama_manager import APP_OLLAMA_HOST, ensure_ollama_ready, fetch_ollama_models, ollama_api_url
 from ui.styles import DIALOG_BASE_STYLE, DIALOG_BUTTON_STYLE
 
 logger = logging.getLogger('AIChat')
@@ -99,20 +99,21 @@ class AIChatDialog(QDialog):
         if models:
             self.model_combo.addItems(models)
             if status.warning and status.local_model_names:
-                self.status_label.setText("Ollama 已运行，但未加载程序目录 models；请退出 Ollama 后重启本程序")
+                self.status_label.setText(f"专用 Ollama 端口 {APP_OLLAMA_HOST} 已占用，但未加载程序目录 models")
             else:
                 detail = f"已识别到 {len(models)} 个模型"
                 if status.local_models_dir:
                     detail += "，使用程序目录 models"
+                detail += f"，端口 {APP_OLLAMA_HOST}"
                 self.status_label.setText(f"就绪 ({detail})")
         else:
             self.model_combo.addItem("未检测到可用模型")
             if status.local_model_names and status.service_available:
-                self.status_label.setText("Ollama 已运行，但未加载程序目录 models；请退出 Ollama 后重启本程序")
+                self.status_label.setText(f"专用 Ollama 端口 {APP_OLLAMA_HOST} 已占用，但未加载程序目录 models")
             elif status.local_model_names:
-                self.status_label.setText("检测到程序目录 models，但无法启动或连接 Ollama")
+                self.status_label.setText(f"检测到程序目录 models，但无法启动或连接专用 Ollama ({APP_OLLAMA_HOST})")
             else:
-                self.status_label.setText("未检测到模型；请确认程序目录 models 或 Ollama 默认模型目录")
+                self.status_label.setText("未检测到模型；请确认程序目录 models")
 
     def setup_ui(self):
         layout = QVBoxLayout()

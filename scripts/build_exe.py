@@ -5,6 +5,7 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+OLLAMA_RUNTIME_NAMES = ("ollama", "runtime/ollama")
 
 
 def clean_old_builds():
@@ -70,26 +71,63 @@ def build_executable():
         return False
 
 
+def find_ollama_runtime_source():
+    """查找可复制到 dist 的 Ollama 运行时目录。"""
+    for relative_name in OLLAMA_RUNTIME_NAMES:
+        candidate = PROJECT_ROOT / relative_name
+        if (candidate / "ollama.exe").exists():
+            return candidate
+
+    found = shutil.which("ollama")
+    if found:
+        return Path(found).resolve().parent
+
+    local_app_data = os.environ.get("LOCALAPPDATA", "")
+    program_files = os.environ.get("ProgramFiles", "")
+    program_files_x86 = os.environ.get("ProgramFiles(x86)", "")
+    candidates = [
+        Path(local_app_data) / "Programs" / "Ollama",
+        Path(program_files) / "Ollama",
+        Path(program_files_x86) / "Ollama",
+    ]
+    for candidate in candidates:
+        if (candidate / "ollama.exe").exists():
+            return candidate
+    return None
+
+
+def copy_directory(source: Path, target: Path, display_name: str):
+    if target.exists():
+        shutil.rmtree(target)
+
+    print(f"\n正在复制 {display_name} 到 dist（文件较大时可能需要一些时间）...")
+    shutil.copytree(source, target)
+    print(f"[成功] 已复制 {display_name}: {target}")
+
+
 def copy_runtime_assets():
-    """复制运行时外部资源。models 不打进 exe，保持为 exe 同级目录。"""
+    """复制运行时外部资源。模型和 Ollama 运行时保持为 exe 同级目录。"""
     dist_dir = PROJECT_ROOT / "dist"
     source_models = PROJECT_ROOT / "models"
     target_models = dist_dir / "models"
+    target_ollama = dist_dir / "ollama"
 
     if not dist_dir.exists():
-        print("\n未找到 dist 目录，跳过模型复制。")
+        print("\n未找到 dist 目录，跳过运行资源复制。")
         return
 
     if not source_models.exists():
         print("\n未找到 models 目录，跳过模型复制。")
+    else:
+        copy_directory(source_models, target_models, "models 目录")
+
+    source_ollama = find_ollama_runtime_source()
+    if source_ollama is None:
+        print("\n[警告] 未找到 Ollama 运行时，AI 功能在未安装 Ollama 的离线电脑上不可用。")
+        print("       建议将 ollama.exe 所在目录放到项目根目录的 ollama 文件夹后重新打包。")
         return
 
-    if target_models.exists():
-        shutil.rmtree(target_models)
-
-    print("\n正在复制 models 目录到 dist（模型文件较大，可能需要一些时间）...")
-    shutil.copytree(source_models, target_models)
-    print(f"[成功] 已复制模型目录: {target_models}")
+    copy_directory(source_ollama, target_ollama, "Ollama 运行时")
 
 
 if __name__ == "__main__":

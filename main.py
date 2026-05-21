@@ -19,7 +19,7 @@ from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QApplication, QMessageBox
 from config import config
 from core.database import Database
-from services.ollama_manager import ensure_ollama_ready
+from services.ollama_manager import APP_OLLAMA_HOST, ensure_ollama_ready
 from ui.login import LoginDialog
 from ui.main_window import MainWindow
 from metadata.constants import ADMIN_PERMISSIONS
@@ -227,7 +227,7 @@ def initialize_ollama_for_local_models():
                 None,
                 "Ollama 模型提示",
                 status.warning + "\n\n"
-                "如果任务栏里已经有 Ollama，请先退出 Ollama，再重新打开本程序。"
+                f"本程序只连接专用本机端口 {APP_OLLAMA_HOST}，不会关闭或重启系统中已有的 Ollama。"
             )
     except Exception as e:
         logger.exception("Ollama 本地模型初始化失败")
