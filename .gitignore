@@ -26,7 +26,7 @@ dist/
 *.exe
 
 # Large local model files
-models/*.gguf
+models/
 
 # OS files
 Thumbs.db

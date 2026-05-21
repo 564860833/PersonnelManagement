@@ -1134,64 +1134,33 @@ class QueryTab(QWidget):
             filtered_mapping = {k: v for k, v in full_mapping.items() if v in selected_headers}
             # ==============================================================
 
-            # 3. 构建 CSV 数据 (Token 密度最大化)
-            csv_lines = []
-
-            # 3.1 生成表头 (使用过滤后的 mapping)
+            # 3. 收集可分析字段。确定性统计由 AIChatDialog 在每轮提问时动态生成。
             available_keys = []
             if current_data:
                 sample_row = current_data[0]
-                # 这里改为遍历 filtered_mapping
                 for db_key in filtered_mapping.keys():
                     if db_key in sample_row:
                         available_keys.append(db_key)
 
-            # 对应的中文表头列表
-            headers = [filtered_mapping[k] for k in available_keys]
-            csv_lines.append(",".join(headers))
+            if not available_keys:
+                QMessageBox.warning(self, "提示", "所选字段在当前数据中不存在，无法进行分析。")
+                return
 
-            # 3.2 智能数据截断与格式化
-            limit_rows = 100
-            process_data = current_data[:limit_rows]
+            analysis_payload = {
+                "table_name": self.current_table_name,
+                "table_label": self.get_table_name(self.current_table_name),
+                "rows": current_data,
+                "selected_fields": available_keys,
+                "field_labels": {key: filtered_mapping[key] for key in available_keys},
+            }
 
-            for person in process_data:
-                row_values = []
-                for key in available_keys:
-                    val = person.get(key)
-                    # 处理空值
-                    if val is None: val = ""
-                    val = str(val).strip()
-
-                    # 去除换行符和多余空格，替换英文逗号
-                    val = re.sub(r'\s+', ' ', val)
-                    val = val.replace(',', '，')
-
-                    row_values.append(val)
-
-                csv_lines.append(",".join(row_values))
-
-            # 4. 组合最终文本
-            context_str = "\n".join(csv_lines)
-            total_count = len(current_data)
-
-            note = ""
-            if total_count > limit_rows:
-                note = f"\n(注：当前表格共 {total_count} 人，为保证 AI 运行速度，仅截取前 {limit_rows} 人进行分析。)"
-
-            # 明确告诉 AI 这是一个 CSV 数据
-            final_data_context = (
-                f"Data({self.get_table_name(self.current_table_name)}):\n"
-                f"```csv\n{context_str}\n```"
-                f"{note}"
-            )
-
-            # 5. 打开窗口
+            # 4. 打开窗口
             try:
                 if hasattr(self, 'ai_dialog') and self.ai_dialog is not None:
                     self.ai_dialog.close()
 
                 from ui.ai_chat import AIChatDialog
-                self.ai_dialog = AIChatDialog(final_data_context, self)
+                self.ai_dialog = AIChatDialog(analysis_payload, self)
                 self.ai_dialog.setWindowTitle(f"智能分析 - {self.get_table_name(self.current_table_name)}")
                 self.ai_dialog.show()
 

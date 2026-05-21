@@ -1,3 +1,4 @@
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -60,10 +61,35 @@ def build_executable():
         # 运行打包命令
         subprocess.run(command, check=True, cwd=PROJECT_ROOT)
         print("\n打包成功！生成的可执行文件位于 dist 文件夹中。")
+        return True
     except subprocess.CalledProcessError as e:
         print(f"\n[错误] 打包失败，错误代码: {e}")
+        return False
     except FileNotFoundError:
         print("\n[错误] 找不到 pyinstaller 命令，请确保已通过 'pip install pyinstaller' 安装。")
+        return False
+
+
+def copy_runtime_assets():
+    """复制运行时外部资源。models 不打进 exe，保持为 exe 同级目录。"""
+    dist_dir = PROJECT_ROOT / "dist"
+    source_models = PROJECT_ROOT / "models"
+    target_models = dist_dir / "models"
+
+    if not dist_dir.exists():
+        print("\n未找到 dist 目录，跳过模型复制。")
+        return
+
+    if not source_models.exists():
+        print("\n未找到 models 目录，跳过模型复制。")
+        return
+
+    if target_models.exists():
+        shutil.rmtree(target_models)
+
+    print("\n正在复制 models 目录到 dist（模型文件较大，可能需要一些时间）...")
+    shutil.copytree(source_models, target_models)
+    print(f"[成功] 已复制模型目录: {target_models}")
 
 
 if __name__ == "__main__":
@@ -71,6 +97,10 @@ if __name__ == "__main__":
     clean_old_builds()
 
     # 2. 执行打包
-    build_executable()
+    build_ok = build_executable()
+
+    # 3. 复制外部运行资源
+    if build_ok:
+        copy_runtime_assets()
 
     print("\n所有流程执行完毕！你可以直接打开 dist 文件夹运行 '人员信息管理系统.exe' 测试了。")

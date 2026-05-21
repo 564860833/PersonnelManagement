@@ -6,6 +6,8 @@ import markdown
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QTextEdit, QLineEdit,
                              QPushButton, QLabel, QHBoxLayout, QComboBox, QGroupBox, QMessageBox)
 from PyQt5.QtCore import pyqtSignal, QObject
+from services.ai_analysis import build_analysis_context, build_direct_answer
+from services.ollama_manager import ensure_ollama_ready, fetch_ollama_models, ollama_api_url
 from ui.styles import DIALOG_BASE_STYLE, DIALOG_BUTTON_STYLE
 
 logger = logging.getLogger('AIChat')
@@ -20,7 +22,7 @@ class AIWorker(QObject):
         self.model_name = model_name
         self.messages = messages  # 接收完整的消息列表
         self.n_ctx = n_ctx
-        self.api_url = "http://127.0.0.1:11434/api/chat"
+        self.api_url = ollama_api_url("/api/chat")
         self._is_running = True
 
     def stop(self):
@@ -72,9 +74,9 @@ class AIWorker(QObject):
 
 
 class AIChatDialog(QDialog):
-    def __init__(self, data_context, parent=None):
+    def __init__(self, analysis_payload, parent=None):
         super().__init__(parent)
-        self.data_context = data_context
+        self.analysis_payload = analysis_payload
         # 新增：用于存储多轮对话的消息列表
         self.history_messages = []
         self.setWindowTitle("智能分析助手 (多轮对话版)")
@@ -87,25 +89,30 @@ class AIChatDialog(QDialog):
         event.accept()
 
     def get_local_models(self):
-        try:
-            response = requests.get("http://127.0.0.1:11434/api/tags", timeout=3)
-            if response.status_code == 200:
-                data = response.json()
-                models = [model['name'] for model in data.get('models', [])]
-                return models
-        except Exception as e:
-            logger.error(f"获取模型列表失败: {e}")
-        return []
+        available, models = fetch_ollama_models(timeout=3)
+        return models if available else []
 
     def refresh_models(self):
         self.model_combo.clear()
-        models = self.get_local_models()
+        status = ensure_ollama_ready(start_if_needed=True)
+        models = status.service_models
         if models:
             self.model_combo.addItems(models)
-            self.status_label.setText(f"就绪 (已识别到 {len(models)} 个本地模型)")
+            if status.warning and status.local_model_names:
+                self.status_label.setText("Ollama 已运行，但未加载程序目录 models；请退出 Ollama 后重启本程序")
+            else:
+                detail = f"已识别到 {len(models)} 个模型"
+                if status.local_models_dir:
+                    detail += "，使用程序目录 models"
+                self.status_label.setText(f"就绪 ({detail})")
         else:
-            self.model_combo.addItem("未检测到模型/服务未启动")
-            self.status_label.setText("错误：无法连接 Ollama")
+            self.model_combo.addItem("未检测到可用模型")
+            if status.local_model_names and status.service_available:
+                self.status_label.setText("Ollama 已运行，但未加载程序目录 models；请退出 Ollama 后重启本程序")
+            elif status.local_model_names:
+                self.status_label.setText("检测到程序目录 models，但无法启动或连接 Ollama")
+            else:
+                self.status_label.setText("未检测到模型；请确认程序目录 models 或 Ollama 默认模型目录")
 
     def setup_ui(self):
         layout = QVBoxLayout()
@@ -176,6 +183,40 @@ class AIChatDialog(QDialog):
         self.chat_history.clear()
         self.chat_history.append("<p style='color:gray;'><i>对话已清空</i></p>")
 
+    def build_round_context(self, question):
+        return build_analysis_context(
+            table_name=self.analysis_payload["table_name"],
+            rows=self.analysis_payload["rows"],
+            selected_fields=self.analysis_payload["selected_fields"],
+            field_labels=self.analysis_payload["field_labels"],
+            user_question=question,
+            table_label=self.analysis_payload.get("table_label"),
+        )
+
+    def build_direct_answer(self, question):
+        return build_direct_answer(
+            table_name=self.analysis_payload["table_name"],
+            rows=self.analysis_payload["rows"],
+            user_question=question,
+            table_label=self.analysis_payload.get("table_label"),
+        )
+
+    def system_prompt(self):
+        return (
+            "### 角色\n"
+            "你是一名专业的人力资源数据分析师。\n\n"
+            "### 可信数据规则\n"
+            "1. 只能根据每轮用户消息中提供的【程序计算结果】和【明细数据】回答。\n"
+            "2. 涉及总数、比例、分布、排行时，必须优先使用程序计算的全量统计，不能自行从样本估算。\n"
+            "3. 如果只提供样本明细，样本只能用于举例，不能当作全量数据。\n"
+            "4. 如果上下文无法支持用户问题，请回答“抱歉，根据现有数据无法回答该问题”。\n"
+            "5. 不要生成 SQL，不要声称已经执行 SQL，不要编造不存在的字段、人员或政策。\n"
+            "6. 晋升相关结论只能解释已导入字段，不得根据任职时间或职级顺序自行判断政策资格。\n\n"
+            "### 输出规则\n"
+            "1. 多条数据优先使用 Markdown 表格。\n"
+            "2. 回复要简洁、专业，最后只做必要总结。\n"
+        )
+
     def start_inference(self):
         question = self.input_field.text().strip()
         if not question: return
@@ -194,25 +235,41 @@ class AIChatDialog(QDialog):
         self.send_btn.setEnabled(False)
         self.status_label.setText("AI 正在思考中...")
 
-        # 2. 构造本次请求的消息列表
-        # 如果是首轮对话，加入系统提示词和数据上下文
-        if not self.history_messages:
-            system_content = (
-                "### 角色\n你是一名专业的人力资源数据分析师。\n\n"
-                "### 核心任务a\n请仅根据下方提供的【CSV数据】回答用户的【提问】。如果数据中不存在相关信息，请直接回答'抱歉，根据现有数据无法回答该问题'，严禁编造信息。\n\n"
-                "### 数据内容\n"
-                f"{self.data_context}\n\n"
-                "### 输出规则\n"
-                "1. 使用 Markdown 表格列出多条数据。\n"
-                "2. 回复简洁、专业，只需要在最后进行总结，禁止输出与数据无关的内容。\n"
-        )
-            self.history_messages.append({"role": "system", "content": system_content})
+        direct_answer = self.build_direct_answer(question)
+        if direct_answer:
+            if not self.history_messages:
+                self.history_messages.append({"role": "system", "content": self.system_prompt()})
+            self.history_messages.append({"role": "user", "content": question})
+            self.handle_response(direct_answer)
+            return
 
-        # 将当前问题加入历史记录
+        # 2. 构造本次请求的消息列表
+        # 如果是首轮对话，只加入稳定的系统规则；本轮数据上下文动态生成，不写入长期历史。
+        if not self.history_messages:
+            self.history_messages.append({"role": "system", "content": self.system_prompt()})
+
+        try:
+            round_context = self.build_round_context(question)
+        except Exception as e:
+            logger.exception("AI 分析上下文生成失败")
+            self.chat_history.append(f"<p style='color:red;'>AI 分析准备失败：{str(e)}</p>")
+            self.send_btn.setEnabled(True)
+            self.status_label.setText("就绪")
+            return
+
+        enriched_question = (
+            "### 用户问题\n"
+            f"{question}\n\n"
+            "### 程序计算结果\n"
+            f"{round_context}"
+        )
+        request_messages = self.history_messages + [{"role": "user", "content": enriched_question}]
+
+        # 长期历史只保存原始问题，避免把大段统计上下文在多轮对话中重复累积。
         self.history_messages.append({"role": "user", "content": question})
 
-        # 3. 启动后台线程，传递完整的对话历史
-        self.worker = AIWorker(model_name, self.history_messages, n_ctx)
+        # 3. 启动后台线程，传递本轮请求消息
+        self.worker = AIWorker(model_name, request_messages, n_ctx)
         self.worker_thread = threading.Thread(target=self.worker.run)
         self.worker_thread.daemon = True
         self.worker.finished.connect(self.handle_response)
