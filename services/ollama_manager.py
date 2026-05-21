@@ -19,7 +19,6 @@ logger = logging.getLogger("OllamaManager")
 APP_OLLAMA_HOST = "127.0.0.1:11435"
 APP_OLLAMA_URL = f"http://{APP_OLLAMA_HOST}"
 APP_OLLAMA_RUNTIME_DIR = "ollama"
-EMBEDDING_MODEL_NAME = "bge-m3:latest"
 
 _started_process: Optional[subprocess.Popen] = None
 
@@ -34,7 +33,6 @@ class OllamaStatus:
     ollama_executable: Optional[str]
     message: str
     warning: Optional[str] = None
-    embedding_model_available: bool = False
 
 
 def get_application_dir() -> Path:
@@ -103,7 +101,6 @@ def ensure_ollama_ready(
         ollama_executable=executable,
         message=message,
         warning=message,
-        embedding_model_available=EMBEDDING_MODEL_NAME in local_model_names,
     )
 
 
@@ -255,7 +252,6 @@ def _build_available_status(
         ollama_executable=executable,
         message=message,
         warning=warning,
-        embedding_model_available=EMBEDDING_MODEL_NAME in service_models,
     )
 
 

@@ -330,7 +330,6 @@ BUTTON_STYLES = {
     """,
 }
 
-ANALYSIS_FIELD_LABEL_STYLE = "color: #333; font-weight: bold; margin-bottom: 5px;"
 COMPACT_BUTTON_STYLE = "padding: 3px;"
 
 PAGINATION_BUTTON_STYLE = """

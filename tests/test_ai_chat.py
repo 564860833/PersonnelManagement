@@ -1,51 +1,88 @@
 import inspect
 import unittest
+from unittest.mock import patch
 
-from ui.ai_chat import AIChatDialog, clean_ai_response
+from services.ai_direct import ask_model, build_messages
+from ui.ai_chat import AIChatDialog, AIWorker
 
 
-class AIChatFlowTests(unittest.TestCase):
-    def test_start_inference_does_not_short_circuit_tool_answers(self):
-        source = inspect.getsource(AIChatDialog.start_inference)
+FIELD_LABELS = {
+    "sequence": "序号",
+    "name": "姓名",
+    "department": "部门",
+}
 
-        self.assertNotIn("direct_answer", source)
-        self.assertNotIn("round_context", source)
-        self.assertIn("AIWorker", source)
-        self.assertIn("self.query_engine", inspect.getsource(AIChatDialog.__init__))
-        self.assertIn("self.session_state", source)
 
-    def test_clean_count_response_removes_prompt_leakage(self):
-        response = (
-            "严格输出要求指定一句话、列表、表格或是/否回答，以它为准。\n"
-            "最终答案\n"
-            "用户的问题是询问有多少条记录属于中央机关作为批准机关的情况。"
-            "根据工具调用结果中的count_rows统计，满足条件的条数为2条。"
+def payload():
+    return {
+        "table_name": "base_info",
+        "table_label": "人员基本信息",
+        "rows": [
+            {"sequence": 1, "name": "张三", "department": "研发部"},
+            {"sequence": 2, "name": "李四", "department": "综合部"},
+        ],
+        "selected_fields": ["sequence", "name", "department"],
+        "field_labels": FIELD_LABELS,
+    }
+
+
+class FakeResponse:
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return {"message": {"content": "已收到表数据。"}}
+
+
+class AIChatDirectModelTests(unittest.TestCase):
+    def test_chat_dialog_no_longer_uses_structured_pipeline(self):
+        source = "\n".join(
+            [
+                inspect.getsource(AIChatDialog),
+                inspect.getsource(AIWorker),
+                inspect.getsource(AIChatDialog.start_inference),
+            ]
         )
 
-        cleaned = clean_ai_response(response, "count")
+        self.assertIn("AIWorker", source)
+        self.assertIn("ask_model", source)
+        self.assertNotIn("AIQueryEngine", source)
+        self.assertNotIn("AIConversationState", source)
+        self.assertNotIn("session_state", source)
+        self.assertNotIn("clean_ai_response", source)
 
-        self.assertEqual("满足条件的条数为2条。", cleaned)
-        self.assertNotIn("严格输出要求", cleaned)
-        self.assertNotIn("最终答案", cleaned)
-        self.assertNotIn("工具调用结果", cleaned)
+    def test_build_messages_imports_current_table_data(self):
+        messages = build_messages("张三在哪个部门？", payload())
+        all_text = "\n".join(message["content"] for message in messages)
 
-    def test_clean_boolean_response_keeps_yes_no_shape(self):
-        response = "最终答案\n根据工具调用结果可知，是，张三的用工类型为全职。"
+        self.assertEqual("system", messages[0]["role"])
+        self.assertEqual("user", messages[1]["role"])
+        self.assertIn("人员基本信息 (base_info)", all_text)
+        self.assertIn('"field": "name"', all_text)
+        self.assertIn('"label": "姓名"', all_text)
+        self.assertIn('"name": "张三"', all_text)
+        self.assertIn('"name": "李四"', all_text)
+        self.assertIn("张三在哪个部门？", all_text)
+        for old_pipeline_text in ("规则", "统计口径", "工具调用", "QueryPlan"):
+            self.assertNotIn(old_pipeline_text, all_text)
 
-        cleaned = clean_ai_response(response, "boolean")
+    def test_ask_model_posts_to_ollama_chat(self):
+        with patch("services.ai_direct.requests.post", return_value=FakeResponse()) as post:
+            answer = ask_model("当前表有谁？", payload(), "qwen2:latest", n_ctx=8192, timeout=5)
 
-        self.assertTrue(cleaned.startswith("是"))
-        self.assertNotIn("最终答案", cleaned)
-        self.assertNotIn("工具调用结果", cleaned)
+        self.assertEqual("已收到表数据。", answer)
+        post.assert_called_once()
+        url = post.call_args.args[0]
+        body = post.call_args.kwargs["json"]
+        self.assertTrue(url.endswith("/api/chat"))
+        self.assertEqual("qwen2:latest", body["model"])
+        self.assertFalse(body["stream"])
+        self.assertEqual({"num_ctx": 8192}, body["options"])
+        self.assertEqual("当前表有谁？", body["messages"][1]["content"].split("用户问题：\n", 1)[1])
 
-    def test_clean_list_response_keeps_markdown_table(self):
-        response = "最终答案\n| 姓名 | 部门 |\n| --- | --- |\n| 张三 | 研发部 |"
-
-        cleaned = clean_ai_response(response, "list")
-
-        self.assertIn("| 姓名 | 部门 |", cleaned)
-        self.assertIn("| 张三 | 研发部 |", cleaned)
-        self.assertNotIn("最终答案", cleaned)
+    def test_ask_model_requires_model_name(self):
+        with self.assertRaises(ValueError):
+            ask_model("问题", payload(), "", n_ctx=4096)
 
 
 if __name__ == "__main__":

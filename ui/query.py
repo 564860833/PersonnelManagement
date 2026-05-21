@@ -27,7 +27,6 @@ from metadata.query_options import (
     POSITION_MAPPING,
 )
 from ui.styles import (
-    ANALYSIS_FIELD_LABEL_STYLE,
     CARD_STYLE,
     DIALOG_BASE_STYLE,
     DIALOG_BUTTON_STYLE,
@@ -541,85 +540,6 @@ class GradeSelectionDialog(QDialog):
             return [check.text() for check in self.grade_checks if check.isChecked()]
 
 
-class ColumnSelectionDialog(QDialog):
-    """用于选择要发送给 AI 分析的列的对话框"""
-
-    def __init__(self, columns, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("选择分析字段")
-        self.setMinimumSize(300, 450)
-        self.columns = columns
-        self.checkboxes = []
-        self.setup_ui()
-
-    def setup_ui(self):
-        layout = QVBoxLayout()
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(12)
-        self.setStyleSheet(DIALOG_BASE_STYLE + DIALOG_BUTTON_STYLE)
-
-        # 提示标签
-        label = QLabel("请选择需要让 AI 分析的数据列（默认全选）：")
-        label.setStyleSheet(ANALYSIS_FIELD_LABEL_STYLE)
-        layout.addWidget(label)
-
-        # 滚动区域 (防止列太多超出屏幕)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        content = QWidget()
-        scroll_layout = QVBoxLayout(content)
-
-        # 全选/全不选按钮
-        btn_layout = QHBoxLayout()
-        select_all_btn = QPushButton("全选")
-        deselect_all_btn = QPushButton("全不选")
-        select_all_btn.setObjectName("secondaryButton")
-        deselect_all_btn.setObjectName("secondaryButton")
-        select_all_btn.clicked.connect(self.select_all)
-        deselect_all_btn.clicked.connect(self.deselect_all)
-        btn_layout.addWidget(select_all_btn)
-        btn_layout.addWidget(deselect_all_btn)
-        scroll_layout.addLayout(btn_layout)
-
-        # 添加列复选框
-        for col in self.columns:
-            cb = QCheckBox(col)
-            cb.setChecked(True)  # 默认全部选中
-            self.checkboxes.append(cb)
-            scroll_layout.addWidget(cb)
-
-        scroll_layout.addStretch()  # 将复选框顶上去
-
-        scroll.setWidget(content)
-        layout.addWidget(scroll)
-
-        # 底部确定/取消按钮
-        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        button_box.accepted.connect(self.accept)
-        button_box.rejected.connect(self.reject)
-        ok_button = button_box.button(QDialogButtonBox.Ok)
-        cancel_button = button_box.button(QDialogButtonBox.Cancel)
-        if ok_button is not None:
-            ok_button.setObjectName("primaryButton")
-        if cancel_button is not None:
-            cancel_button.setObjectName("secondaryButton")
-        layout.addWidget(button_box)
-
-        self.setLayout(layout)
-
-    def select_all(self):
-        for cb in self.checkboxes:
-            cb.setChecked(True)
-
-    def deselect_all(self):
-        for cb in self.checkboxes:
-            cb.setChecked(False)
-
-    def get_selected_columns(self):
-        """返回被选中的中文列名列表"""
-        return [cb.text() for cb in self.checkboxes if cb.isChecked()]
-
-
 class QueryTab(QWidget):
     def __init__(self, db: Database, permissions: dict):
         """查询标签页初始化
@@ -1100,7 +1020,7 @@ class QueryTab(QWidget):
 
     def open_ai_chat(self):
         """
-        启动 AI 分析对话框 (增加了列选择功能 + 性能优化版)
+        启动 AI 分析对话框。
         """
         try:
             # 1. 获取当前筛选后的数据
@@ -1116,34 +1036,18 @@ class QueryTab(QWidget):
             if not full_mapping and current_data:
                 full_mapping = {k: k for k in current_data[0].keys()}
 
-            # ================== 【新增】弹出列选择对话框 ==================
-            # 提取所有中文表头作为选项
-            all_chinese_headers = list(full_mapping.values())
+            # 3. 收集当前表完整查询结果中的全部可映射字段。
+            available_fields = set()
+            for row in current_data:
+                available_fields.update(row.keys())
 
-            # 实例化并显示对话框
-            dialog = ColumnSelectionDialog(all_chinese_headers, self)
-            if dialog.exec_() != QDialog.Accepted:
-                return  # 用户点击了取消，直接退出
-
-            selected_headers = dialog.get_selected_columns()
-            if not selected_headers:
-                QMessageBox.warning(self, "提示", "您必须至少选择一列才能进行分析。")
-                return
-
-            # 根据用户的选择过滤 mapping：只保留勾选了的字段
-            filtered_mapping = {k: v for k, v in full_mapping.items() if v in selected_headers}
-            # ==============================================================
-
-            # 3. 收集可分析字段。确定性统计由 AIChatDialog 在每轮提问时动态生成。
             available_keys = []
-            if current_data:
-                sample_row = current_data[0]
-                for db_key in filtered_mapping.keys():
-                    if db_key in sample_row:
-                        available_keys.append(db_key)
+            for db_key in full_mapping.keys():
+                if db_key in available_fields:
+                    available_keys.append(db_key)
 
             if not available_keys:
-                QMessageBox.warning(self, "提示", "所选字段在当前数据中不存在，无法进行分析。")
+                QMessageBox.warning(self, "提示", "当前表没有可导入 AI 的字段。")
                 return
 
             analysis_payload = {
@@ -1151,7 +1055,7 @@ class QueryTab(QWidget):
                 "table_label": self.get_table_name(self.current_table_name),
                 "rows": current_data,
                 "selected_fields": available_keys,
-                "field_labels": {key: filtered_mapping[key] for key in available_keys},
+                "field_labels": {key: full_mapping.get(key, key) for key in available_keys},
             }
 
             # 4. 打开窗口

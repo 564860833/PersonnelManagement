@@ -6,7 +6,6 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 OLLAMA_RUNTIME_NAMES = ("ollama", "runtime/ollama")
-EMBEDDING_MODEL_NAME = "bge-m3:latest"
 
 
 def clean_old_builds():
@@ -106,38 +105,6 @@ def copy_directory(source: Path, target: Path, display_name: str):
     print(f"[成功] 已复制 {display_name}: {target}")
 
 
-def list_ollama_model_names(models_dir: Path):
-    manifests_dir = models_dir / "manifests"
-    if not manifests_dir.is_dir():
-        return []
-
-    names = []
-    for manifest in manifests_dir.rglob("*"):
-        if not manifest.is_file():
-            continue
-        try:
-            parts = manifest.relative_to(manifests_dir).parts
-        except ValueError:
-            continue
-        if len(parts) < 4:
-            continue
-        namespace, model, tag = parts[1], parts[2], parts[3]
-        if namespace == "library":
-            names.append(f"{model}:{tag}")
-        else:
-            names.append(f"{namespace}/{model}:{tag}")
-    return sorted(set(names))
-
-
-def warn_if_embedding_model_missing(models_dir: Path):
-    model_names = list_ollama_model_names(models_dir)
-    if EMBEDDING_MODEL_NAME in model_names:
-        print(f"[成功] 已检测到 embedding 模型: {EMBEDDING_MODEL_NAME}")
-        return
-    print(f"\n[警告] 未在 models 中检测到 embedding 模型 {EMBEDDING_MODEL_NAME}。")
-    print("       程序仍可运行，但 AI 语义检索会降级为同义词和模糊匹配。")
-
-
 def copy_runtime_assets():
     """复制运行时外部资源。模型和 Ollama 运行时保持为 exe 同级目录。"""
     dist_dir = PROJECT_ROOT / "dist"
@@ -153,7 +120,6 @@ def copy_runtime_assets():
         print("\n未找到 models 目录，跳过模型复制。")
     else:
         copy_directory(source_models, target_models, "models 目录")
-        warn_if_embedding_model_missing(target_models)
 
     source_ollama = find_ollama_runtime_source()
     if source_ollama is None:
