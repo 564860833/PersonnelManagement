@@ -22,6 +22,52 @@ QFrame#sectionCard {
 }
 """
 
+SCROLLBAR_STYLE = """
+QScrollBar:vertical {
+    width: 8px;
+    margin: 0;
+    border: none;
+    background: transparent;
+}
+QScrollBar:horizontal {
+    height: 8px;
+    margin: 0;
+    border: none;
+    background: transparent;
+}
+QScrollBar::handle:vertical,
+QScrollBar::handle:horizontal {
+    background-color: rgba(30, 90, 168, 70);
+    border: none;
+    border-radius: 4px;
+}
+QScrollBar::handle:vertical {
+    min-height: 28px;
+}
+QScrollBar::handle:horizontal {
+    min-width: 28px;
+}
+QScrollBar::handle:vertical:hover,
+QScrollBar::handle:horizontal:hover {
+    background-color: rgba(30, 90, 168, 110);
+}
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical,
+QScrollBar::add-line:horizontal,
+QScrollBar::sub-line:horizontal {
+    width: 0;
+    height: 0;
+    border: none;
+    background: transparent;
+}
+QScrollBar::add-page:vertical,
+QScrollBar::sub-page:vertical,
+QScrollBar::add-page:horizontal,
+QScrollBar::sub-page:horizontal {
+    background: transparent;
+}
+"""
+
 DIALOG_BASE_STYLE = """
 QDialog {
     background-color: #F0F2F5;
@@ -113,7 +159,7 @@ QHeaderView::section {
     border: 1px solid #8BB6E8;
     font-weight: bold;
 }
-"""
+""" + SCROLLBAR_STYLE
 
 DIALOG_BUTTON_STYLE = """
 QPushButton {
@@ -474,7 +520,7 @@ QHeaderView::section {
     border: 1px solid #8BB6E8;
     font-weight: bold;
 }
-"""
+""" + SCROLLBAR_STYLE
 
 NO_PERMISSION_LABEL_STYLE = "font-size: 18px; color: #b00020;"
 
