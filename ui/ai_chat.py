@@ -6,7 +6,8 @@ import markdown
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QTextEdit, QLineEdit,
                              QPushButton, QLabel, QHBoxLayout, QComboBox, QGroupBox, QMessageBox)
 from PyQt5.QtCore import pyqtSignal, QObject
-from services.ai_analysis import build_analysis_context, build_direct_answer
+from services.ai_analysis import build_analysis_context
+from services.ai_tools import AIToolContext, run_analysis_tools
 from services.ollama_manager import APP_OLLAMA_HOST, ensure_ollama_ready, fetch_ollama_models, ollama_api_url
 from ui.styles import DIALOG_BASE_STYLE, DIALOG_BUTTON_STYLE
 
@@ -79,6 +80,13 @@ class AIChatDialog(QDialog):
         self.analysis_payload = analysis_payload
         # 新增：用于存储多轮对话的消息列表
         self.history_messages = []
+        self.tool_context = AIToolContext(
+            table_name=self.analysis_payload["table_name"],
+            rows=self.analysis_payload["rows"],
+            selected_fields=self.analysis_payload["selected_fields"],
+            field_labels=self.analysis_payload["field_labels"],
+            table_label=self.analysis_payload.get("table_label"),
+        )
         self.setWindowTitle("智能分析助手 (多轮对话版)")
         self.resize(900, 800)
         self.setup_ui()
@@ -105,6 +113,8 @@ class AIChatDialog(QDialog):
                 if status.local_models_dir:
                     detail += "，使用程序目录 models"
                 detail += f"，端口 {APP_OLLAMA_HOST}"
+                if not status.embedding_model_available:
+                    detail += "，语义检索降级"
                 self.status_label.setText(f"就绪 ({detail})")
         else:
             self.model_combo.addItem("未检测到可用模型")
@@ -185,6 +195,15 @@ class AIChatDialog(QDialog):
         self.chat_history.append("<p style='color:gray;'><i>对话已清空</i></p>")
 
     def build_round_context(self, question):
+        tool_result = run_analysis_tools(
+            table_name=self.analysis_payload["table_name"],
+            rows=self.analysis_payload["rows"],
+            selected_fields=self.analysis_payload["selected_fields"],
+            field_labels=self.analysis_payload["field_labels"],
+            user_question=question,
+            table_label=self.analysis_payload.get("table_label"),
+            tool_context=self.tool_context,
+        )
         return build_analysis_context(
             table_name=self.analysis_payload["table_name"],
             rows=self.analysis_payload["rows"],
@@ -192,27 +211,43 @@ class AIChatDialog(QDialog):
             field_labels=self.analysis_payload["field_labels"],
             user_question=question,
             table_label=self.analysis_payload.get("table_label"),
+            tool_result=tool_result,
         )
 
-    def build_direct_answer(self, question):
-        return build_direct_answer(
+    def prepare_round(self, question):
+        tool_result = run_analysis_tools(
             table_name=self.analysis_payload["table_name"],
             rows=self.analysis_payload["rows"],
+            selected_fields=self.analysis_payload["selected_fields"],
+            field_labels=self.analysis_payload["field_labels"],
+            table_label=self.analysis_payload.get("table_label"),
+            user_question=question,
+            tool_context=self.tool_context,
+        )
+        round_context = build_analysis_context(
+            table_name=self.analysis_payload["table_name"],
+            rows=self.analysis_payload["rows"],
+            selected_fields=self.analysis_payload["selected_fields"],
+            field_labels=self.analysis_payload["field_labels"],
             user_question=question,
             table_label=self.analysis_payload.get("table_label"),
+            tool_result=tool_result,
         )
+        return tool_result, round_context
 
     def system_prompt(self):
         return (
             "### 角色\n"
             "你是一名专业的人力资源数据分析师。\n\n"
             "### 可信数据规则\n"
-            "1. 只能根据每轮用户消息中提供的【程序计算结果】和【明细数据】回答。\n"
-            "2. 涉及总数、比例、分布、排行时，必须优先使用程序计算的全量统计，不能自行从样本估算。\n"
-            "3. 如果只提供样本明细，样本只能用于举例，不能当作全量数据。\n"
+            "1. 只能根据每轮用户消息中提供的【工具调用结果】和【匹配明细】回答。\n"
+            "2. 涉及总数、比例、分布、排行时，必须使用工具调用结果中的确定性统计，不能自行估算。\n"
+            "3. 如果只提供匹配明细，明细只能用于解释该问题，不能当作全量数据。\n"
             "4. 如果上下文无法支持用户问题，请回答“抱歉，根据现有数据无法回答该问题”。\n"
             "5. 不要生成 SQL，不要声称已经执行 SQL，不要编造不存在的字段、人员或政策。\n"
             "6. 晋升相关结论只能解释已导入字段，不得根据任职时间或职级顺序自行判断政策资格。\n\n"
+            "7. 如果工具结果提示“数据被截断”或“仅展示前 X 条”，必须先说明匹配总数，"
+            "再列出样本，并建议用户通过界面筛选功能查看完整名单。\n\n"
             "### 输出规则\n"
             "1. 多条数据优先使用 Markdown 表格。\n"
             "2. 回复要简洁、专业，最后只做必要总结。\n"
@@ -236,26 +271,24 @@ class AIChatDialog(QDialog):
         self.send_btn.setEnabled(False)
         self.status_label.setText("AI 正在思考中...")
 
-        direct_answer = self.build_direct_answer(question)
-        if direct_answer:
-            if not self.history_messages:
-                self.history_messages.append({"role": "system", "content": self.system_prompt()})
-            self.history_messages.append({"role": "user", "content": question})
-            self.handle_response(direct_answer)
-            return
-
-        # 2. 构造本次请求的消息列表
-        # 如果是首轮对话，只加入稳定的系统规则；本轮数据上下文动态生成，不写入长期历史。
         if not self.history_messages:
             self.history_messages.append({"role": "system", "content": self.system_prompt()})
 
         try:
-            round_context = self.build_round_context(question)
+            tool_result, round_context = self.prepare_round(question)
         except Exception as e:
             logger.exception("AI 分析上下文生成失败")
             self.chat_history.append(f"<p style='color:red;'>AI 分析准备失败：{str(e)}</p>")
             self.send_btn.setEnabled(True)
             self.status_label.setText("就绪")
+            return
+
+        if tool_result.retrieval_degraded:
+            self.status_label.setText("AI 正在思考中...（语义检索降级）")
+
+        if tool_result.direct_answer:
+            self.history_messages.append({"role": "user", "content": question})
+            self.handle_response(tool_result.direct_answer)
             return
 
         enriched_question = (

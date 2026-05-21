@@ -22,6 +22,7 @@ def build_analysis_context(
     field_labels: Dict[str, str],
     user_question: str,
     table_label: str = None,
+    tool_result=None,
 ) -> str:
     """Build markdown context whose statistics are computed outside the LLM."""
     rows = list(rows or [])
@@ -32,6 +33,17 @@ def build_analysis_context(
     if not selected_fields and rows:
         selected_fields = [field for field in rows[0].keys() if field != "id"]
     selected_fields = _existing_fields(rows, selected_fields)
+
+    if tool_result is not None:
+        return _build_tool_augmented_context(
+            table_name,
+            rows,
+            selected_fields,
+            field_labels,
+            user_question,
+            table_label,
+            tool_result,
+        )
 
     if not rows or not selected_fields:
         return "\n".join(
@@ -60,6 +72,46 @@ def build_analysis_context(
     ]
 
     return "\n\n".join(section for section in sections if section)
+
+
+def _build_tool_augmented_context(
+    table_name: str,
+    rows: Sequence[dict],
+    selected_fields: Sequence[str],
+    field_labels: Dict[str, str],
+    user_question: str,
+    table_label: str,
+    tool_result,
+) -> str:
+    row_count = len(rows or [])
+    sections = [
+        _build_compact_scope_section(table_name, table_label, row_count, selected_fields, field_labels),
+        _build_field_reference_section(table_name, selected_fields, field_labels) if selected_fields else "",
+        getattr(tool_result, "context_markdown", ""),
+        _build_business_rules_section(selected_fields, user_question, field_labels),
+        _build_compact_answer_rules_section(),
+    ]
+    return "\n\n".join(section for section in sections if section)
+
+
+def _build_compact_scope_section(
+    table_name: str,
+    table_label: str,
+    row_count: int,
+    selected_fields: Sequence[str],
+    field_labels: Dict[str, str],
+) -> str:
+    selected_labels = "、".join(_label(field, field_labels) for field in selected_fields)
+    return "\n".join(
+        [
+            "## 数据范围",
+            f"- 当前表：{table_label} ({table_name})",
+            f"- 当前结果行数：{row_count}",
+            f"- 选中字段数：{len(selected_fields)}",
+            f"- 选中字段：{selected_labels}",
+            "- 上下文策略：本轮只提供程序按问题调用工具后的结果，不默认展开全量统计或全量明细。",
+        ]
+    )
 
 
 def build_direct_answer(
@@ -371,6 +423,19 @@ def _build_answer_rules_section(row_count: int) -> str:
             "- 如果上下文无法支持用户问题，请回答“抱歉，根据现有数据无法回答该问题”。",
             "- 不要生成 SQL，也不要声称已经执行 SQL。",
             sample_rule,
+        ]
+    )
+
+
+def _build_compact_answer_rules_section() -> str:
+    return "\n".join(
+        [
+            "## 回答约束",
+            "- 只能根据本轮工具调用结果回答，不要编造不存在的字段、人员或政策。",
+            "- 涉及总数、比例、分布、排行时，必须使用工具调用结果中的确定性统计。",
+            "- 如果工具调用结果无法支持用户问题，请回答“抱歉，根据现有数据无法回答该问题”。",
+            "- 如果工具调用结果提示“数据被截断”或“仅展示前 X 条”，必须先说明匹配总数，再列出样本，并建议用户通过界面筛选功能查看完整名单。",
+            "- 不要生成 SQL，也不要声称已经执行 SQL。",
         ]
     )
 
