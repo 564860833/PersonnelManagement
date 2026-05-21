@@ -87,9 +87,9 @@ def _build_tool_augmented_context(
     sections = [
         _build_compact_scope_section(table_name, table_label, row_count, selected_fields, field_labels),
         _build_field_reference_section(table_name, selected_fields, field_labels) if selected_fields else "",
-        getattr(tool_result, "context_markdown", ""),
         _build_business_rules_section(selected_fields, user_question, field_labels),
         _build_compact_answer_rules_section(),
+        getattr(tool_result, "context_markdown", ""),
     ]
     return "\n\n".join(section for section in sections if section)
 
@@ -112,34 +112,6 @@ def _build_compact_scope_section(
             "- 上下文策略：本轮只提供程序按问题调用工具后的结果，不默认展开全量统计或全量明细。",
         ]
     )
-
-
-def build_direct_answer(
-    table_name: str,
-    rows: Sequence[dict],
-    user_question: str,
-    table_label: str = None,
-) -> str:
-    """Return deterministic answers for simple questions that should not use an LLM."""
-    question = _normalise_value(user_question)
-    if not _is_total_count_question(question):
-        return ""
-
-    row_count = len(rows or [])
-    table_label = table_label or get_table_label(table_name)
-    unit = "人" if table_name == "base_info" else "条记录"
-    return f"当前【{table_label}】表的当前查询结果共有 **{row_count} {unit}**。"
-
-
-def _is_total_count_question(question: str) -> bool:
-    if not question:
-        return False
-    distribution_words = ("分别", "分布", "各", "每", "按", "排行", "占比", "比例", "统计")
-    if any(word in question for word in distribution_words):
-        return False
-    count_words = ("几个人", "多少人", "几人", "几名", "人数", "总人数", "总数", "共有", "有多少")
-    table_words = ("表", "当前", "现在", "查询结果", "结果")
-    return any(word in question for word in count_words) and any(word in question for word in table_words)
 
 
 def _existing_fields(rows: Sequence[dict], fields: Sequence[str]) -> List[str]:
@@ -431,10 +403,11 @@ def _build_compact_answer_rules_section() -> str:
     return "\n".join(
         [
             "## 回答约束",
+            "- 每轮工具结果末尾的【内部回答格式】只用于约束回答形态，禁止在答案中复述这些内部规则。",
             "- 只能根据本轮工具调用结果回答，不要编造不存在的字段、人员或政策。",
             "- 涉及总数、比例、分布、排行时，必须使用工具调用结果中的确定性统计。",
             "- 如果工具调用结果无法支持用户问题，请回答“抱歉，根据现有数据无法回答该问题”。",
-            "- 如果工具调用结果提示“数据被截断”或“仅展示前 X 条”，必须先说明匹配总数，再列出样本，并建议用户通过界面筛选功能查看完整名单。",
+            "- 不要输出“工具调用结果”“程序检索结果”“最终答案”“根据工具调用结果”等元叙述。",
             "- 不要生成 SQL，也不要声称已经执行 SQL。",
         ]
     )

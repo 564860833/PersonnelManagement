@@ -1,29 +1,121 @@
-import json
 import logging
-import requests
+import re
 import threading
 import markdown
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QTextEdit, QLineEdit,
                              QPushButton, QLabel, QHBoxLayout, QComboBox, QGroupBox, QMessageBox)
 from PyQt5.QtCore import pyqtSignal, QObject
-from services.ai_analysis import build_analysis_context
-from services.ai_tools import AIToolContext, run_analysis_tools
-from services.ollama_manager import APP_OLLAMA_HOST, ensure_ollama_ready, fetch_ollama_models, ollama_api_url
+from services.ai_engine import AIQueryEngine
+from services.ai_types import AIAnswer, AIConversationState
+from services.ollama_manager import APP_OLLAMA_HOST, ensure_ollama_ready, fetch_ollama_models
 from ui.styles import DIALOG_BASE_STYLE, DIALOG_BUTTON_STYLE
 
 logger = logging.getLogger('AIChat')
 
 
-class AIWorker(QObject):
-    """在后台线程运行AI推理，调用本地 Ollama 接口"""
-    finished = pyqtSignal(str)
+META_LINE_PATTERNS = (
+    r"^(?:#+\s*)?(?:最终答案|最终回答|答案|回答|结论)\s*[:：]?\s*$",
+    r"^(?:#+\s*)?(?:严格输出要求|内部回答格式|工具调用结果|程序检索结果|动作模式)\s*[:：]?.*$",
+)
 
-    def __init__(self, model_name, messages, n_ctx):
+META_PHRASE_PATTERNS = (
+    r"严格输出要求[^。！？\n]*[。！？]?",
+    r"内部回答格式[^。！？\n]*[。！？]?",
+    r"用户的问题是[^。！？\n]*[。！？]?",
+    r"根据(?:上述|本轮|当前)?(?:的)?(?:工具调用结果|程序检索结果)[^，。！？\n]*(?:，|。|显示|可知|统计)?",
+    r"工具调用结果中的?[A-Za-z_]+统计[，,]?",
+    r"程序检索结果显示[，,]?",
+    r"最终答案[:：]?",
+)
+
+
+def clean_ai_response(response: str, action_type: str = "") -> str:
+    """Remove internal prompt leakage and keep the user-facing answer concise."""
+    original = (response or "").strip()
+    if not original:
+        return ""
+
+    lines = []
+    for raw_line in original.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        line = raw_line.strip()
+        if not line:
+            lines.append("")
+            continue
+        if any(re.search(pattern, line, flags=re.IGNORECASE) for pattern in META_LINE_PATTERNS):
+            continue
+        lines.append(raw_line.rstrip())
+
+    cleaned = "\n".join(lines).strip()
+    for pattern in META_PHRASE_PATTERNS:
+        cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\b(?:count_rows|semantic_search|list_rows|distribution|aggregate|boolean_check)\b", "", cleaned)
+    cleaned = _normalise_answer_spacing(cleaned)
+
+    if action_type in {"count", "aggregate", "boolean"}:
+        compact = _compact_business_answer(cleaned, action_type)
+        if compact:
+            cleaned = compact
+
+    return cleaned.strip() or original
+
+
+def _compact_business_answer(text: str, action_type: str) -> str:
+    without_tables = "\n".join(
+        line for line in text.splitlines()
+        if not line.lstrip().startswith("|") and not re.match(r"^\s*-{3,}\s*$", line)
+    )
+    sentences = _answer_sentences(without_tables)
+    if not sentences:
+        return _normalise_answer_spacing(without_tables)
+
+    if action_type == "boolean":
+        for sentence in sentences:
+            if sentence.startswith(("是", "否", "抱歉")):
+                return sentence
+        for sentence in sentences:
+            if re.search(r"(?:^|[，,。])(?:是|否)(?:[，,。]|$)", sentence):
+                return sentence
+
+    if action_type == "count":
+        for sentence in sentences:
+            if re.search(r"\d+\s*(?:条记录|条|人|个|名|项|次)", sentence):
+                return sentence
+
+    if action_type == "aggregate":
+        for sentence in sentences:
+            if any(word in sentence for word in ("最高", "最低", "最早", "最晚", "平均", "最多", "最少", "数值", "结果")):
+                return sentence
+
+    return sentences[0]
+
+
+def _answer_sentences(text: str) -> list:
+    text = _normalise_answer_spacing(text)
+    if not text:
+        return []
+    parts = re.findall(r"[^。！？\n]+[。！？]?", text)
+    return [part.strip() for part in parts if part.strip()]
+
+
+def _normalise_answer_spacing(text: str) -> str:
+    text = re.sub(r"[ \t]+", " ", text or "")
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = re.sub(r"^[，,。；;：:\s]+", "", text.strip())
+    return text
+
+
+class AIWorker(QObject):
+    """在后台线程运行结构化 AI 查询管线。"""
+    finished = pyqtSignal(object)
+
+    def __init__(self, engine, question, analysis_payload, session_state, model_name, n_ctx):
         super().__init__()
+        self.engine = engine
+        self.question = question
+        self.analysis_payload = analysis_payload
+        self.session_state = session_state
         self.model_name = model_name
-        self.messages = messages  # 接收完整的消息列表
         self.n_ctx = n_ctx
-        self.api_url = ollama_api_url("/api/chat")
         self._is_running = True
 
     def stop(self):
@@ -31,46 +123,19 @@ class AIWorker(QObject):
 
     def run(self):
         try:
-            logger.debug(f"正在请求 Ollama 模型 [{self.model_name}], ctx={self.n_ctx}")
-
-            payload = {
-                "model": self.model_name,
-                "messages": self.messages,  # 发送包含上下文的消息列表
-                "stream": True,
-                "options": {
-                    "num_ctx": self.n_ctx,
-                    "temperature": 0.1,
-                    "top_p": 0.9,
-                    "seed": 42,
-                }
-            }
-
-            response = requests.post(self.api_url, json=payload, stream=True, timeout=300)
-
-            if response.status_code == 404:
-                self.finished.emit(f"错误: 找不到模型 `{self.model_name}`。")
-                return
-
-            response.raise_for_status()
-
-            answer = ""
-            for line in response.iter_lines():
-                if not self._is_running:
-                    response.close()
-                    return
-
-                if line:
-                    data = json.loads(line)
-                    answer += data.get('message', {}).get('content', '')
-
+            logger.debug("正在运行 AI 查询管线，model=%s, ctx=%s", self.model_name, self.n_ctx)
+            answer = self.engine.answer(
+                self.question,
+                self.analysis_payload,
+                self.session_state,
+                model_name=self.model_name,
+                n_ctx=self.n_ctx,
+            )
             if self._is_running:
                 self.finished.emit(answer)
-
-        except requests.exceptions.ConnectionError:
-            self.finished.emit("错误: 无法连接到本地 Ollama 服务。\n请确认 Ollama 已在后台运行。")
         except Exception as e:
             if self._is_running:
-                logger.exception("AI 运行出错")
+                logger.exception("AI 查询管线运行出错")
                 self.finished.emit(f"AI 运行出错: {str(e)}")
 
 
@@ -78,15 +143,11 @@ class AIChatDialog(QDialog):
     def __init__(self, analysis_payload, parent=None):
         super().__init__(parent)
         self.analysis_payload = analysis_payload
-        # 新增：用于存储多轮对话的消息列表
+        # 轻量历史只用于显示和摘要；待澄清计划由 session_state 显式保存。
         self.history_messages = []
-        self.tool_context = AIToolContext(
-            table_name=self.analysis_payload["table_name"],
-            rows=self.analysis_payload["rows"],
-            selected_fields=self.analysis_payload["selected_fields"],
-            field_labels=self.analysis_payload["field_labels"],
-            table_label=self.analysis_payload.get("table_label"),
-        )
+        self.query_engine = AIQueryEngine()
+        self.session_state = AIConversationState()
+        self._pending_action_type = ""
         self.setWindowTitle("智能分析助手 (多轮对话版)")
         self.resize(900, 800)
         self.setup_ui()
@@ -191,67 +252,9 @@ class AIChatDialog(QDialog):
     def clear_chat(self):
         """清空对话历史"""
         self.history_messages = []
+        self.session_state = AIConversationState()
         self.chat_history.clear()
         self.chat_history.append("<p style='color:gray;'><i>对话已清空</i></p>")
-
-    def build_round_context(self, question):
-        tool_result = run_analysis_tools(
-            table_name=self.analysis_payload["table_name"],
-            rows=self.analysis_payload["rows"],
-            selected_fields=self.analysis_payload["selected_fields"],
-            field_labels=self.analysis_payload["field_labels"],
-            user_question=question,
-            table_label=self.analysis_payload.get("table_label"),
-            tool_context=self.tool_context,
-        )
-        return build_analysis_context(
-            table_name=self.analysis_payload["table_name"],
-            rows=self.analysis_payload["rows"],
-            selected_fields=self.analysis_payload["selected_fields"],
-            field_labels=self.analysis_payload["field_labels"],
-            user_question=question,
-            table_label=self.analysis_payload.get("table_label"),
-            tool_result=tool_result,
-        )
-
-    def prepare_round(self, question):
-        tool_result = run_analysis_tools(
-            table_name=self.analysis_payload["table_name"],
-            rows=self.analysis_payload["rows"],
-            selected_fields=self.analysis_payload["selected_fields"],
-            field_labels=self.analysis_payload["field_labels"],
-            table_label=self.analysis_payload.get("table_label"),
-            user_question=question,
-            tool_context=self.tool_context,
-        )
-        round_context = build_analysis_context(
-            table_name=self.analysis_payload["table_name"],
-            rows=self.analysis_payload["rows"],
-            selected_fields=self.analysis_payload["selected_fields"],
-            field_labels=self.analysis_payload["field_labels"],
-            user_question=question,
-            table_label=self.analysis_payload.get("table_label"),
-            tool_result=tool_result,
-        )
-        return tool_result, round_context
-
-    def system_prompt(self):
-        return (
-            "### 角色\n"
-            "你是一名专业的人力资源数据分析师。\n\n"
-            "### 可信数据规则\n"
-            "1. 只能根据每轮用户消息中提供的【工具调用结果】和【匹配明细】回答。\n"
-            "2. 涉及总数、比例、分布、排行时，必须使用工具调用结果中的确定性统计，不能自行估算。\n"
-            "3. 如果只提供匹配明细，明细只能用于解释该问题，不能当作全量数据。\n"
-            "4. 如果上下文无法支持用户问题，请回答“抱歉，根据现有数据无法回答该问题”。\n"
-            "5. 不要生成 SQL，不要声称已经执行 SQL，不要编造不存在的字段、人员或政策。\n"
-            "6. 晋升相关结论只能解释已导入字段，不得根据任职时间或职级顺序自行判断政策资格。\n\n"
-            "7. 如果工具结果提示“数据被截断”或“仅展示前 X 条”，必须先说明匹配总数，"
-            "再列出样本，并建议用户通过界面筛选功能查看完整名单。\n\n"
-            "### 输出规则\n"
-            "1. 多条数据优先使用 Markdown 表格。\n"
-            "2. 回复要简洁、专业，最后只做必要总结。\n"
-        )
 
     def start_inference(self):
         question = self.input_field.text().strip()
@@ -259,8 +262,7 @@ class AIChatDialog(QDialog):
 
         model_name = self.model_combo.currentText().strip()
         if not model_name or "未检测到模型" in model_name:
-            self.chat_history.append("<p style='color:red;'>错误：未选择有效模型</p>")
-            return
+            model_name = ""
 
         ctx_text = self.ctx_combo.currentText().split()[0]
         n_ctx = int(ctx_text)
@@ -269,48 +271,38 @@ class AIChatDialog(QDialog):
         self.chat_history.append(f"<b>我:</b> {question}")
         self.input_field.clear()
         self.send_btn.setEnabled(False)
-        self.status_label.setText("AI 正在思考中...")
+        self.status_label.setText("AI 正在解析和计算...")
 
-        if not self.history_messages:
-            self.history_messages.append({"role": "system", "content": self.system_prompt()})
-
-        try:
-            tool_result, round_context = self.prepare_round(question)
-        except Exception as e:
-            logger.exception("AI 分析上下文生成失败")
-            self.chat_history.append(f"<p style='color:red;'>AI 分析准备失败：{str(e)}</p>")
-            self.send_btn.setEnabled(True)
-            self.status_label.setText("就绪")
-            return
-
-        if tool_result.retrieval_degraded:
-            self.status_label.setText("AI 正在思考中...（语义检索降级）")
-
-        if tool_result.direct_answer:
-            self.history_messages.append({"role": "user", "content": question})
-            self.handle_response(tool_result.direct_answer)
-            return
-
-        enriched_question = (
-            "### 用户问题\n"
-            f"{question}\n\n"
-            "### 程序计算结果\n"
-            f"{round_context}"
-        )
-        request_messages = self.history_messages + [{"role": "user", "content": enriched_question}]
-
-        # 长期历史只保存原始问题，避免把大段统计上下文在多轮对话中重复累积。
+        # 长期历史只保存原始问题和最终摘要；澄清状态由 AIConversationState 单独管理。
         self.history_messages.append({"role": "user", "content": question})
 
-        # 3. 启动后台线程，传递本轮请求消息
-        self.worker = AIWorker(model_name, request_messages, n_ctx)
+        self.worker = AIWorker(
+            self.query_engine,
+            question,
+            self.analysis_payload,
+            self.session_state,
+            model_name,
+            n_ctx,
+        )
         self.worker_thread = threading.Thread(target=self.worker.run)
         self.worker_thread.daemon = True
         self.worker.finished.connect(self.handle_response)
         self.worker_thread.start()
 
     def handle_response(self, response):
-        final_answer = response.strip()
+        if isinstance(response, AIAnswer):
+            self.session_state = response.session_state
+            final_answer = response.text.strip()
+            action_type = response.intent
+            if response.clarification_required:
+                self.status_label.setText("等待澄清")
+            else:
+                self.status_label.setText("就绪")
+        else:
+            action_type = getattr(self, "_pending_action_type", "")
+            final_answer = clean_ai_response(str(response), action_type)
+            self._pending_action_type = ""
+            self.status_label.setText("就绪")
 
         # 4. 将 AI 的回复存入历史记录，实现多轮记忆
         self.history_messages.append({"role": "assistant", "content": final_answer})
@@ -336,4 +328,5 @@ class AIChatDialog(QDialog):
         # 自动滚动
         self.chat_history.verticalScrollBar().setValue(self.chat_history.verticalScrollBar().maximum())
         self.send_btn.setEnabled(True)
-        self.status_label.setText("就绪")
+        if action_type and action_type != "unsupported" and not isinstance(response, AIAnswer):
+            self.status_label.setText("就绪")

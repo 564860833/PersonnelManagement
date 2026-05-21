@@ -1,6 +1,6 @@
 import unittest
 
-from services.ai_analysis import build_analysis_context, build_direct_answer
+from services.ai_analysis import build_analysis_context
 
 
 FIELD_LABELS = {
@@ -121,38 +121,6 @@ class AIAnalysisContextTests(unittest.TestCase):
         self.assertIn("只能解释字段原值", context)
         self.assertIn("禁止根据任职时间", context)
         self.assertIn("不得根据任职时间", context)
-
-    def test_total_count_question_gets_direct_answer(self):
-        rows = [
-            {"sequence": 1, "name": "张三"},
-            {"sequence": 2, "name": "李四"},
-            {"sequence": 3, "name": "王五"},
-        ]
-
-        answer = build_direct_answer(
-            "base_info",
-            rows,
-            "表中现在有几个人呢",
-            "人员基本信息",
-        )
-
-        self.assertIn("共有 **3 人**", answer)
-
-    def test_distribution_question_does_not_use_direct_count_answer(self):
-        rows = [
-            {"sequence": 1, "name": "张三", "current_grade": "一级"},
-            {"sequence": 2, "name": "李四", "current_grade": "二级"},
-        ]
-
-        answer = build_direct_answer(
-            "base_info",
-            rows,
-            "各职级分别有多少人？",
-            "人员基本信息",
-        )
-
-        self.assertEqual("", answer)
-
 
 if __name__ == "__main__":
     unittest.main()
