@@ -48,7 +48,7 @@ QLabel#fieldLabel {
 QLineEdit,
 QComboBox,
 QTextEdit {
-    min-height: 30px;
+    min-height: 32px;
     padding: 4px 8px;
     border: 1px solid #d0d7de;
     border-radius: 5px;
@@ -117,7 +117,7 @@ QHeaderView::section {
 
 DIALOG_BUTTON_STYLE = """
 QPushButton {
-    min-height: 30px;
+    min-height: 32px;
     padding: 4px 14px;
     border: 1px solid #c9d1d9;
     border-radius: 5px;
@@ -159,6 +159,30 @@ QPushButton:disabled {
     background-color: #f6f8fa;
     border-color: #eaeef2;
     color: #8c959f;
+}
+"""
+
+DANGER_CONFIRM_STYLE = DIALOG_BASE_STYLE + DIALOG_BUTTON_STYLE + """
+QFrame#dangerConfirmPanel {
+    background-color: #FFFFFF;
+    border: none;
+    border-radius: 8px;
+}
+QLabel#dangerTitle {
+    color: #8F1D16;
+    font-size: 16px;
+    font-weight: bold;
+}
+QLabel#dangerMessage {
+    color: #3f4752;
+    line-height: 1.4;
+}
+QLabel#dangerHint {
+    color: #8F1D16;
+    background-color: #FFF1F0;
+    border: 1px solid #F3B5AD;
+    border-radius: 5px;
+    padding: 8px;
 }
 """
 

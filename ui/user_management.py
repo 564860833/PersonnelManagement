@@ -5,6 +5,7 @@ from PyQt5.QtCore import Qt
 import logging
 import sqlite3
 from metadata.constants import TABLE_LABELS
+from ui.confirm_dialog import confirm_danger
 from ui.styles import DIALOG_BASE_STYLE, DIALOG_BUTTON_STYLE, RESULT_TABLE_STYLE
 
 logger = logging.getLogger('UserMgr')
@@ -235,14 +236,7 @@ class UserManagementDialog(QDialog):
         selected_row = selected_rows[0].row()
         username = self.user_table.item(selected_row, 0).text()
 
-        # 确认删除
-        reply = QMessageBox.question(
-            self, "确认删除",
-            f"确定要删除用户 {username} 吗？此操作不可恢复！",
-            QMessageBox.Yes | QMessageBox.No
-        )
-
-        if reply == QMessageBox.Yes:
+        if confirm_danger(self, "确认删除用户", f"确定要删除用户 {username} 吗？", "删除用户"):
             try:
                 # 删除用户
                 if self.db.delete_user(username):

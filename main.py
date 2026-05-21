@@ -168,7 +168,8 @@ def main():
             # 用户取消登录或登录失败
             logger.info("用户取消登录，应用程序将退出")
             db.close()
-            return app.exec_()
+            app.quit()
+            return 0
 
     except Exception as e:
         logger.exception("应用程序初始化过程中发生错误")

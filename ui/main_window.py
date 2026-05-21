@@ -10,6 +10,7 @@ from services.excel_export import export_table_data
 from services.excel_import import import_prepared_records, prepare_import_preview
 from config import config
 from ui.change_password import ChangePasswordDialog
+from ui.confirm_dialog import confirm_danger
 from ui.user_management import AddUserDialog, UserManagementDialog
 from ui.log_viewer import LogViewer
 from ui.styles import NO_PERMISSION_LABEL_STYLE
@@ -296,13 +297,7 @@ class MainWindow(QMainWindow):
 
     def on_clear_log(self):
         """清空日志文件"""
-        reply = QMessageBox.question(
-            self, "确认清空",
-            "确定要清空所有日志记录吗？此操作不可恢复！",
-            QMessageBox.Yes | QMessageBox.No
-        )
-
-        if reply == QMessageBox.Yes:
+        if confirm_danger(self, "确认清空日志", "确定要清空所有日志记录吗？", "清空日志"):
             try:
                 with open(config.LOG_FILE, 'w') as f:
                     f.write("")
@@ -470,11 +465,7 @@ class MainWindow(QMainWindow):
 
     def on_clear_database(self):
         """清空数据库前提示确认"""
-        reply = QMessageBox.question(
-            self, "确认清空", "确认要清空数据库吗？此操作无法撤销。",
-            QMessageBox.Yes | QMessageBox.No
-        )
-        if reply == QMessageBox.Yes:
+        if confirm_danger(self, "确认清空数据库", "确认要清空数据库吗？", "清空数据库"):
             self.clear_database()
 
     def clear_database(self):

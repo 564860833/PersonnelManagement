@@ -1,5 +1,6 @@
 from PyQt5.QtWidgets import (QDialog, QLabel, QLineEdit, QPushButton,
-                             QVBoxLayout, QMessageBox, QHBoxLayout, QFrame, QApplication)
+                             QVBoxLayout, QMessageBox, QHBoxLayout, QFrame,
+                             QApplication, QSizePolicy)
 from PyQt5.QtCore import Qt
 from core.database import Database
 from ui.styles import LOGIN_DIALOG_STYLE
@@ -24,16 +25,18 @@ class LoginDialog(QDialog):
 
     def setup_ui(self):
         self.setWindowTitle("系统登录")
-        self.setFixedSize(420, 390)
+        self.setMinimumSize(420, 390)
         self.setStyleSheet(LOGIN_DIALOG_STYLE)
 
         main_layout = QVBoxLayout()
-        main_layout.setContentsMargins(24, 24, 24, 24)
+        main_layout.setContentsMargins(18, 18, 18, 18)
         main_layout.setAlignment(Qt.AlignCenter)
 
         card = QFrame()
         card.setObjectName("loginCard")
-        card.setFixedWidth(360)
+        card.setMinimumWidth(360)
+        card.setMaximumWidth(520)
+        card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         card_layout = QVBoxLayout(card)
         card_layout.setContentsMargins(36, 28, 36, 28)
         card_layout.setSpacing(12)
