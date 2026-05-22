@@ -15,6 +15,16 @@ SELECTION_FAILURE_MESSAGE = "我没能从问题中判断需要哪些表和字段
 MAX_HISTORY_MESSAGES = 20
 ALLOWED_HISTORY_ROLES = {"user", "assistant"}
 IDENTITY_FIELDS = ("sequence", "name")
+CONTEXT_ERROR_PATTERNS = (
+    "context length",
+    "context window",
+    "context limit",
+    "context_length",
+    "maximum context",
+    "exceeds context",
+    "too many tokens",
+    "prompt is too long",
+)
 
 
 def build_schema_selection_messages(
@@ -112,6 +122,11 @@ def ask_model(
     return str(answer_content).strip()
 
 
+def is_context_length_error(error: Exception) -> bool:
+    error_text = "\n".join(_error_texts(error)).lower()
+    return any(pattern in error_text for pattern in CONTEXT_ERROR_PATTERNS)
+
+
 def _post_chat(model_name: str, messages: List[Dict[str, str]], n_ctx: int, timeout: float) -> str:
     response = requests.post(
         ollama_api_url("/api/chat"),
@@ -125,6 +140,26 @@ def _post_chat(model_name: str, messages: List[Dict[str, str]], n_ctx: int, time
     )
     response.raise_for_status()
     return str(response.json().get("message", {}).get("content", "")).strip()
+
+
+def _error_texts(error: Exception) -> List[str]:
+    texts = [str(error)]
+    response = getattr(error, "response", None)
+    if response is None:
+        return texts
+
+    for attr_name in ("text", "content"):
+        value = getattr(response, attr_name, None)
+        if isinstance(value, bytes):
+            texts.append(value.decode("utf-8", errors="replace"))
+        elif value:
+            texts.append(str(value))
+
+    try:
+        texts.append(_to_json(response.json()))
+    except Exception:
+        pass
+    return texts
 
 
 def _parse_selection_response(content: str) -> Dict[str, Any]:

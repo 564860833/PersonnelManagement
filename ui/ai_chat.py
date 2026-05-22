@@ -15,7 +15,8 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
 )
 
-from services.ai_direct import ask_model
+from services.ai_context import next_context_length, recommend_context_length
+from services.ai_direct import ask_model, is_context_length_error
 from services.ollama_manager import APP_OLLAMA_HOST, ensure_ollama_ready, fetch_ollama_models
 from ui.styles import DIALOG_BASE_STYLE, DIALOG_BUTTON_STYLE
 
@@ -26,13 +27,23 @@ class AIWorker(QObject):
     """在后台线程调用本地 Ollama 模型。"""
 
     finished = pyqtSignal(object)
+    context_changed = pyqtSignal(int)
 
-    def __init__(self, question, analysis_payload, model_name, n_ctx, history_messages=None):
+    def __init__(
+        self,
+        question,
+        analysis_payload,
+        model_name,
+        n_ctx,
+        history_messages=None,
+        max_n_ctx=None,
+    ):
         super().__init__()
         self.question = question
         self.analysis_payload = analysis_payload
         self.model_name = model_name
         self.n_ctx = n_ctx
+        self.max_n_ctx = max_n_ctx or n_ctx
         self.history_messages = [dict(message) for message in history_messages or []]
         self._is_running = True
 
@@ -42,13 +53,7 @@ class AIWorker(QObject):
     def run(self):
         try:
             logger.debug("正在调用 Ollama 模型，model=%s, ctx=%s", self.model_name, self.n_ctx)
-            answer = ask_model(
-                self.question,
-                self.analysis_payload,
-                self.model_name,
-                self.n_ctx,
-                history_messages=self.history_messages,
-            )
+            answer = self._ask_with_context_retry()
             if self._is_running:
                 self.finished.emit(answer or "模型没有返回内容。")
         except Exception as e:
@@ -56,12 +61,43 @@ class AIWorker(QObject):
                 logger.exception("AI 模型调用出错")
                 self.finished.emit(f"AI 运行出错: {str(e)}")
 
+    def _ask_with_context_retry(self):
+        while True:
+            try:
+                return self._ask_with_context(self.n_ctx)
+            except Exception as e:
+                if not is_context_length_error(e):
+                    raise
+
+                retry_n_ctx = next_context_length(self.n_ctx, self.max_n_ctx)
+                if not retry_n_ctx:
+                    raise
+
+                logger.info(
+                    "AI 上下文不足，准备自动升档重试: model=%s, ctx=%s -> %s",
+                    self.model_name,
+                    self.n_ctx,
+                    retry_n_ctx,
+                )
+                self.n_ctx = retry_n_ctx
+                self.context_changed.emit(retry_n_ctx)
+
+    def _ask_with_context(self, n_ctx):
+        return ask_model(
+            self.question,
+            self.analysis_payload,
+            self.model_name,
+            n_ctx,
+            history_messages=self.history_messages,
+        )
+
 
 class AIChatDialog(QDialog):
     def __init__(self, analysis_payload, parent=None):
         super().__init__(parent)
         self.analysis_payload = analysis_payload
         self.history_messages = []
+        self.current_context_recommendation = None
         self.setWindowTitle("智能分析助手")
         self.resize(900, 800)
         self.setup_ui()
@@ -76,6 +112,7 @@ class AIChatDialog(QDialog):
         return models if available else []
 
     def refresh_models(self):
+        self.model_combo.blockSignals(True)
         self.model_combo.clear()
         status = ensure_ollama_ready(start_if_needed=True)
         models = status.service_models
@@ -97,6 +134,24 @@ class AIChatDialog(QDialog):
                 self.status_label.setText(f"检测到程序目录 models，但无法启动或连接专用 Ollama ({APP_OLLAMA_HOST})")
             else:
                 self.status_label.setText("未检测到模型；请确认程序目录 models")
+        self.model_combo.blockSignals(False)
+        self.refresh_context_recommendation()
+
+    def refresh_context_recommendation(self, model_name=None):
+        if model_name is None:
+            model_name = self.model_combo.currentText().strip()
+        if not model_name or "未检测到模型" in model_name:
+            model_name = ""
+
+        self.current_context_recommendation = recommend_context_length(model_name)
+        self.update_context_label(self.current_context_recommendation.n_ctx)
+        return self.current_context_recommendation
+
+    def update_context_label(self, n_ctx):
+        if self.current_context_recommendation:
+            self.ctx_label.setText(f"{int(n_ctx)}（{self.current_context_recommendation.reason}）")
+        else:
+            self.ctx_label.setText(str(n_ctx))
 
     def setup_ui(self):
         layout = QVBoxLayout()
@@ -111,6 +166,7 @@ class AIChatDialog(QDialog):
         settings_layout.addWidget(QLabel("选择模型:"))
         self.model_combo = QComboBox()
         self.model_combo.setMinimumWidth(180)
+        self.model_combo.currentTextChanged.connect(self.refresh_context_recommendation)
         settings_layout.addWidget(self.model_combo)
 
         self.refresh_btn = QPushButton("刷新列表")
@@ -120,10 +176,9 @@ class AIChatDialog(QDialog):
 
         settings_layout.addSpacing(20)
         settings_layout.addWidget(QLabel("上下文长度:"))
-        self.ctx_combo = QComboBox()
-        self.ctx_combo.addItems(["2048", "4096", "8192", "16384"])
-        self.ctx_combo.setCurrentIndex(1)
-        settings_layout.addWidget(self.ctx_combo)
+        self.ctx_label = QLabel("自动检测中...")
+        self.ctx_label.setObjectName("dialogSubtitle")
+        settings_layout.addWidget(self.ctx_label)
 
         self.clear_btn = QPushButton("清空对话")
         self.clear_btn.setObjectName("secondaryButton")
@@ -175,8 +230,8 @@ class AIChatDialog(QDialog):
         if not model_name or "未检测到模型" in model_name:
             model_name = ""
 
-        ctx_text = self.ctx_combo.currentText().split()[0]
-        n_ctx = int(ctx_text)
+        recommendation = self.current_context_recommendation or self.refresh_context_recommendation()
+        n_ctx = recommendation.n_ctx
 
         self.chat_history.append(f"<b>我:</b> {question}")
         self.input_field.clear()
@@ -191,9 +246,11 @@ class AIChatDialog(QDialog):
             model_name,
             n_ctx,
             history_snapshot,
+            recommendation.max_n_ctx,
         )
         self.worker_thread = threading.Thread(target=self.worker.run)
         self.worker_thread.daemon = True
+        self.worker.context_changed.connect(self.update_context_label)
         self.worker.finished.connect(self.handle_response)
         self.worker_thread.start()
 

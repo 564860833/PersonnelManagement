@@ -3,6 +3,7 @@ import json
 import unittest
 from unittest.mock import patch
 
+from services.ai_context import ContextRecommendation, HardwareSnapshot
 from services.ai_direct import (
     SELECTION_FAILURE_MESSAGE,
     ask_model,
@@ -91,10 +92,106 @@ class AIChatDirectModelTests(unittest.TestCase):
 
         self.assertIn("AIWorker", source)
         self.assertIn("ask_model", source)
+        self.assertIn("recommend_context_length", source)
+        self.assertIn("ctx_label", source)
+        self.assertNotIn("ctx_combo", source)
         self.assertNotIn("AIQueryEngine", source)
         self.assertNotIn("AIConversationState", source)
         self.assertNotIn("session_state", source)
         self.assertNotIn("clean_ai_response", source)
+
+    def test_ai_worker_passes_auto_context_to_direct_model(self):
+        history = [{"role": "user", "content": "上一轮问题"}]
+        worker = AIWorker("继续分析", payload(), "qwen2:latest", 8192, history)
+
+        with patch("ui.ai_chat.ask_model", return_value="OK") as ask:
+            worker.run()
+
+        ask.assert_called_once()
+        args = ask.call_args.args
+        kwargs = ask.call_args.kwargs
+        self.assertEqual("继续分析", args[0])
+        self.assertEqual("qwen2:latest", args[2])
+        self.assertEqual(8192, args[3])
+        self.assertEqual(history, kwargs["history_messages"])
+
+    def test_ai_worker_retries_context_errors_by_steps_until_device_limit(self):
+        worker = AIWorker("继续分析", payload(), "qwen2:latest", 2048, max_n_ctx=32768)
+        changed_contexts = []
+        worker.context_changed.connect(changed_contexts.append)
+
+        with patch(
+            "ui.ai_chat.ask_model",
+            side_effect=[
+                RuntimeError("context length exceeded"),
+                RuntimeError("context length exceeded"),
+                RuntimeError("context length exceeded"),
+                RuntimeError("context length exceeded"),
+                "OK",
+            ],
+        ) as ask:
+            worker.run()
+
+        self.assertEqual(5, ask.call_count)
+        self.assertEqual(2048, ask.call_args_list[0].args[3])
+        self.assertEqual(4096, ask.call_args_list[1].args[3])
+        self.assertEqual(8192, ask.call_args_list[2].args[3])
+        self.assertEqual(16384, ask.call_args_list[3].args[3])
+        self.assertEqual(32768, ask.call_args_list[4].args[3])
+        self.assertEqual([4096, 8192, 16384, 32768], changed_contexts)
+
+    def test_ai_worker_does_not_retry_beyond_device_limit(self):
+        worker = AIWorker("继续分析", payload(), "qwen2:latest", 4096, max_n_ctx=4096)
+
+        with patch("ui.ai_chat.ask_model", side_effect=RuntimeError("context length exceeded")) as ask, \
+                patch("ui.ai_chat.logger.exception"):
+            worker.run()
+
+        ask.assert_called_once()
+
+    def test_ai_worker_stops_after_reaching_device_limit(self):
+        worker = AIWorker("继续分析", payload(), "qwen2:latest", 2048, max_n_ctx=32768)
+
+        with patch("ui.ai_chat.ask_model", side_effect=RuntimeError("context length exceeded")) as ask, \
+                patch("ui.ai_chat.logger.exception"):
+            worker.run()
+
+        self.assertEqual(5, ask.call_count)
+        self.assertEqual(2048, ask.call_args_list[0].args[3])
+        self.assertEqual(4096, ask.call_args_list[1].args[3])
+        self.assertEqual(8192, ask.call_args_list[2].args[3])
+        self.assertEqual(16384, ask.call_args_list[3].args[3])
+        self.assertEqual(32768, ask.call_args_list[4].args[3])
+
+    def test_ai_worker_does_not_retry_non_context_errors(self):
+        worker = AIWorker("继续分析", payload(), "qwen2:latest", 2048, max_n_ctx=16384)
+
+        with patch("ui.ai_chat.ask_model", side_effect=RuntimeError("network failed")) as ask, \
+                patch("ui.ai_chat.logger.exception"):
+            worker.run()
+
+        ask.assert_called_once()
+
+    def test_context_label_updates_with_retry_context_and_same_reason(self):
+        dialog = AIChatDialog.__new__(AIChatDialog)
+        dialog.current_context_recommendation = ContextRecommendation(
+            n_ctx=2048,
+            reason="15.6GB 内存 / 4GB 显存",
+            hardware=HardwareSnapshot(),
+            max_n_ctx=8192,
+        )
+
+        class FakeLabel:
+            def __init__(self):
+                self.text = ""
+
+            def setText(self, text):
+                self.text = text
+
+        dialog.ctx_label = FakeLabel()
+        AIChatDialog.update_context_label(dialog, 4096)
+
+        self.assertEqual("4096（15.6GB 内存 / 4GB 显存）", dialog.ctx_label.text)
 
     def test_build_ai_analysis_payload_keeps_permitted_schema_with_empty_rows(self):
         results = {
