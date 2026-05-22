@@ -278,10 +278,17 @@ class AIChatDirectModelTests(unittest.TestCase):
         self.assertIn('table width="100%"', rendered)
         self.assertIn('width="24%"', rendered)
         self.assertIn('width="76%" align="right"', rendered)
-        self.assertIn("background-color: #1E5AA8", rendered)
+        self.assertIn('align="right" style="border: none; margin: 0;"', rendered)
+        self.assertIn("👤", rendered)
+        self.assertIn("background-color: #2563EB", rendered)
         self.assertIn("color: #FFFFFF", rendered)
+        self.assertIn("border-radius: 12px", rendered)
+        self.assertIn("border-top-right-radius: 4px", rendered)
+        self.assertIn("padding: 10px 14px", rendered)
         self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", rendered)
         self.assertNotIn("<script>alert(1)</script>", rendered)
+        self.assertNotIn(">我<", rendered)
+        self.assertNotIn(">AI<", rendered)
 
     def test_ai_message_renders_as_left_bubble_with_markdown_table(self):
         rendered = render_message_html(
@@ -290,18 +297,26 @@ class AIChatDirectModelTests(unittest.TestCase):
         )
 
         self.assertIn('width="76%" align="left"', rendered)
+        self.assertIn('align="left" style="border: none; margin: 0;"', rendered)
+        self.assertIn("🤖", rendered)
         self.assertIn("background-color: #F6F8FA", rendered)
+        self.assertIn("border: 1px solid #E5E7EB", rendered)
+        self.assertIn("border-top-left-radius: 4px", rendered)
         self.assertIn('<table style="border-collapse: collapse; width: 100%; margin: 8px 0;">', rendered)
         self.assertIn('<th style="border: 1px solid #D0D7DE;', rendered)
         self.assertIn('<td style="border: 1px solid #D0D7DE;', rendered)
+        self.assertNotIn(">AI<", rendered)
 
     def test_error_message_renders_as_left_red_bubble(self):
         rendered = render_message_html("assistant", "network failed", is_error=True)
 
         self.assertIn('width="76%" align="left"', rendered)
+        self.assertIn("🤖", rendered)
         self.assertIn("background-color: #FFF1F0", rendered)
         self.assertIn("color: #8F1D16", rendered)
+        self.assertIn("border-top-left-radius: 4px", rendered)
         self.assertIn("network failed", rendered)
+        self.assertNotIn("分析失败", rendered)
 
     def test_context_label_updates_with_retry_context_and_same_reason(self):
         dialog = AIChatDialog.__new__(AIChatDialog)

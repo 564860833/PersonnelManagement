@@ -79,7 +79,7 @@ body {
     font-size: 14px;
 }
 .message {
-    margin: 0 0 14px 0;
+    margin: 0 0 18px 0;
 }
 p {
     margin: 0 0 9px 0;
@@ -171,75 +171,104 @@ class AIWorker(QObject):
 def render_message_html(role: str, content: str, is_error: bool = False) -> str:
     if is_error:
         body_html = html.escape(str(content)).replace("\n", "<br>")
-        title = "分析失败"
         return render_bubble_html(
-            title,
             body_html,
             align="left",
+            avatar="🤖",
+            avatar_background="#FFF1F0",
+            avatar_color="#8F1D16",
             background="#FFF1F0",
             border="#F3B5AD",
             text_color="#8F1D16",
+            corner="left",
         )
     elif role == "user":
         body_html = html.escape(str(content)).replace("\n", "<br>")
-        title = "我"
         return render_bubble_html(
-            title,
             body_html,
             align="right",
-            background="#1E5AA8",
-            border="#1E5AA8",
+            avatar="👤",
+            avatar_background="#EAF2FB",
+            avatar_color="#174A8B",
+            background="#2563EB",
+            border="#2563EB",
             text_color="#FFFFFF",
-            title_color="#57606A",
+            corner="right",
         )
     else:
         body_html = render_markdown_html(content)
-        title = "AI"
         return render_bubble_html(
-            title,
             body_html,
             align="left",
+            avatar="🤖",
+            avatar_background="#EAF2FB",
+            avatar_color="#174A8B",
             background="#F6F8FA",
-            border="#E5EAF0",
+            border="#E5E7EB",
             text_color="#24292F",
+            corner="left",
         )
 
 
 def render_bubble_html(
-    title: str,
     body_html: str,
     align: str,
+    avatar: str,
+    avatar_background: str,
+    avatar_color: str,
     background: str,
     border: str,
     text_color: str,
-    title_color: str = "#57606A",
+    corner: str = "left",
 ) -> str:
     title_align = "right" if align == "right" else "left"
-    first_cell = ""
-    last_cell = ""
-    content_cell = f"""
-        <td width="76%" align="{title_align}" style="border: none; padding: 0;">
-            <div style="color: {title_color}; font-weight: bold; margin-bottom: 5px; text-align: {title_align};">{title}</div>
-            <div style="background-color: {background}; color: {text_color}; border: 1px solid {border}; border-radius: 8px; padding: 10px 12px; text-align: left;">
-                {body_html}
-            </div>
+    tail_radius = (
+        "border-top-left-radius: 4px;"
+        if corner == "left"
+        else "border-top-right-radius: 4px;"
+    )
+    avatar_cell = f"""
+        <td width="32" valign="top" align="center" style="border: none; padding: 0;">
+            <div style="width: 28px; height: 28px; line-height: 28px; text-align: center; border-radius: 14px; background-color: {avatar_background}; color: {avatar_color}; font-size: 15px;">{avatar}</div>
         </td>
     """
-
+    gap_cell = '<td width="8" style="border: none; padding: 0;"></td>'
+    bubble_cell = f"""
+        <td valign="top" align="{title_align}" style="border: none; padding: 0;">
+            <table cellspacing="0" cellpadding="0" style="border: none; margin: 0;">
+                <tr>
+                    <td align="{title_align}" style="border: none; padding: 0;">
+                        <div style="background-color: {background}; color: {text_color}; border: 1px solid {border}; border-radius: 12px; {tail_radius} padding: 10px 14px; text-align: left;">
+                            {body_html}
+                        </div>
+                    </td>
+                </tr>
+            </table>
+        </td>
+    """
     spacer_cell = '<td width="24%" style="border: none; padding: 0;"></td>'
     if align == "right":
-        first_cell = spacer_cell
-        last_cell = content_cell
+        message_cells = f"{bubble_cell}{gap_cell}{avatar_cell}"
+        leading_spacer = spacer_cell
+        trailing_spacer = ""
     else:
-        first_cell = content_cell
-        last_cell = spacer_cell
+        message_cells = f"{avatar_cell}{gap_cell}{bubble_cell}"
+        leading_spacer = ""
+        trailing_spacer = spacer_cell
 
     return f"""
     <div class="message">
         <table width="100%" cellspacing="0" cellpadding="0" style="border: none; margin: 0;">
             <tr>
-                {first_cell}
-                {last_cell}
+                {leading_spacer}
+                <td width="76%" align="{title_align}" style="border: none; padding: 0;">
+                    <table cellspacing="0" cellpadding="0" align="{title_align}" style="border: none; margin: 0;">
+                        <tr>
+                            {message_cells}
+                        </tr>
+                    </table>
+                </td>
+                {trailing_spacer}
             </tr>
         </table>
     </div>
