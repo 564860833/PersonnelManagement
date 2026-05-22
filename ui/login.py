@@ -62,12 +62,6 @@ class LoginDialog(QDialog):
         title_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(title_label)
 
-        version_label = QLabel(f"版本 {config.APP_VERSION}")
-        version_label.setObjectName("loginSubtitle")
-        version_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(version_label)
-        layout.addSpacing(2)
-
     def add_form_layout(self, layout):
         username_group = QVBoxLayout()
         username_group.setContentsMargins(0, 0, 0, 0)

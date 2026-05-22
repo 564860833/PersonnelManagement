@@ -10,7 +10,7 @@ from services.ai_direct import (
     build_messages,
     build_schema_selection_messages,
 )
-from ui.ai_chat import AIChatDialog, AIWorker
+from ui.ai_chat import AIChatDialog, AIWorker, MODEL_PLACEHOLDER
 from ui.main_window import MainWindow
 from ui.query import QueryTab, build_ai_analysis_payload
 
@@ -90,6 +90,76 @@ class FakeOllamaStatus:
 class FakeDb:
     def get_assessment_years(self):
         return []
+
+
+class FakeWidget:
+    def __init__(self):
+        self.enabled = None
+
+    def setEnabled(self, enabled):
+        self.enabled = enabled
+
+
+class FakeButton(FakeWidget):
+    pass
+
+
+class FakeLineEdit(FakeWidget):
+    def __init__(self, text=""):
+        super().__init__()
+        self._text = text
+        self.clear_called = False
+
+    def text(self):
+        return self._text
+
+    def clear(self):
+        self.clear_called = True
+        self._text = ""
+
+
+class FakeCombo(FakeWidget):
+    def __init__(self, text):
+        super().__init__()
+        self._text = text
+
+    def currentText(self):
+        return self._text
+
+
+class FakeLabel:
+    def __init__(self):
+        self.text = ""
+        self.properties = {}
+
+    def setText(self, text):
+        self.text = text
+
+    def setProperty(self, key, value):
+        self.properties[key] = value
+
+
+class FakeScrollBar:
+    def __init__(self):
+        self.value = None
+
+    def maximum(self):
+        return 100
+
+    def setValue(self, value):
+        self.value = value
+
+
+class FakeHistory:
+    def __init__(self):
+        self.items = []
+        self.scroll_bar = FakeScrollBar()
+
+    def append(self, html):
+        self.items.append(html)
+
+    def verticalScrollBar(self):
+        return self.scroll_bar
 
 
 class AIChatDirectModelTests(unittest.TestCase):
@@ -188,6 +258,20 @@ class AIChatDirectModelTests(unittest.TestCase):
 
         ask.assert_called_once()
 
+    def test_ai_worker_emits_failed_for_model_errors(self):
+        worker = AIWorker("继续分析", payload(), "qwen2:latest", 2048, max_n_ctx=16384)
+        failures = []
+        finished = []
+        worker.failed.connect(failures.append)
+        worker.finished.connect(finished.append)
+
+        with patch("ui.ai_chat.ask_model", side_effect=RuntimeError("network failed")), \
+                patch("ui.ai_chat.logger.exception"):
+            worker.run()
+
+        self.assertEqual(["network failed"], failures)
+        self.assertEqual([], finished)
+
     def test_context_label_updates_with_retry_context_and_same_reason(self):
         dialog = AIChatDialog.__new__(AIChatDialog)
         dialog.current_context_recommendation = ContextRecommendation(
@@ -239,6 +323,60 @@ class AIChatDirectModelTests(unittest.TestCase):
 
         open_dialog.assert_not_called()
         start_then_open.assert_called_once()
+
+    def test_open_ai_chat_requires_query_rows_before_ollama_check(self):
+        tab = self.make_query_tab_stub()
+        tab.current_results_dict = {}
+
+        with patch.object(QueryTab, "open_ai_dialog") as open_dialog, \
+                patch.object(QueryTab, "start_ollama_then_open_ai") as start_then_open, \
+                patch("ui.query.ensure_ollama_ready") as ensure_ready, \
+                patch("ui.query.QMessageBox.warning") as warning:
+            QueryTab.open_ai_chat(tab)
+
+        ensure_ready.assert_not_called()
+        open_dialog.assert_not_called()
+        start_then_open.assert_not_called()
+        warning.assert_called_once()
+        self.assertIn("请先查询或查看全部", warning.call_args.args[2])
+
+    def make_chat_dialog_stub(self, model_name="qwen2:latest", question="按部门汇总"):
+        dialog = AIChatDialog.__new__(AIChatDialog)
+        dialog.input_field = FakeLineEdit(question)
+        dialog.model_combo = FakeCombo(model_name)
+        dialog.status_label = FakeLabel()
+        dialog.model_status_label = FakeLabel()
+        dialog.send_btn = FakeButton()
+        dialog.refresh_btn = FakeButton()
+        dialog.clear_btn = FakeButton()
+        dialog.chat_history = FakeHistory()
+        dialog.history_messages = []
+        dialog.is_inference_running = False
+        dialog.worker = None
+        return dialog
+
+    def test_start_inference_without_model_does_not_create_worker(self):
+        dialog = self.make_chat_dialog_stub(model_name=MODEL_PLACEHOLDER)
+
+        AIChatDialog.start_inference(dialog)
+
+        self.assertIsNone(dialog.worker)
+        self.assertFalse(dialog.input_field.clear_called)
+        self.assertEqual("未选择可用模型，无法发送分析请求。", dialog.status_label.text)
+        self.assertFalse(dialog.send_btn.enabled)
+        self.assertTrue(dialog.input_field.enabled)
+
+    def test_handle_error_does_not_store_error_as_assistant_history(self):
+        dialog = self.make_chat_dialog_stub()
+        dialog.history_messages = [{"role": "user", "content": "上一轮问题"}]
+        dialog.is_inference_running = True
+
+        AIChatDialog.handle_error(dialog, "network failed")
+
+        self.assertEqual([{"role": "user", "content": "上一轮问题"}], dialog.history_messages)
+        self.assertIn("network failed", dialog.chat_history.items[-1])
+        self.assertEqual("分析失败：network failed", dialog.status_label.text)
+        self.assertTrue(dialog.send_btn.enabled)
 
     def test_start_ollama_then_open_ai_uses_main_window_progress(self):
         tab = self.make_query_tab_stub()

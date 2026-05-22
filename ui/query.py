@@ -75,6 +75,16 @@ def build_ai_analysis_payload(results_dict: dict, permissions: dict, assessment_
     return payload
 
 
+def has_analysis_rows(analysis_payload: dict) -> bool:
+    """Return True when at least one permitted table has query rows for AI analysis."""
+    for table_payload in (analysis_payload.get("tables") or {}).values():
+        if not isinstance(table_payload, dict):
+            continue
+        if table_payload.get("rows"):
+            return True
+    return False
+
+
 def _month_sort_key(value: str):
     """把 yyyy.MM 转为可比较的月份序号。"""
     year, month = value.split(".")
@@ -1120,6 +1130,10 @@ class QueryTab(QWidget):
 
             if not analysis_payload["schemas"]:
                 QMessageBox.warning(self, "提示", "当前用户没有可用于 AI 分析的数据表权限。")
+                return
+
+            if not has_analysis_rows(analysis_payload):
+                QMessageBox.warning(self, "提示", "请先查询或查看全部后再使用 AI 分析。")
                 return
 
             try:

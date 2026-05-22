@@ -238,7 +238,7 @@ QDialog#loginDialog {
 }
 QLabel#loginTitle {
     color: #174A8B;
-    font-size: 20px;
+    font-size: 26px;
     font-weight: bold;
 }
 QLabel#loginSubtitle {
