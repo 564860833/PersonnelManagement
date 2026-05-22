@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import (
     QComboBox, QFrame, QGraphicsDropShadowEffect,
     QMessageBox, QHeaderView, QDialog,
     QVBoxLayout, QCheckBox, QDialogButtonBox,
-    QScrollArea, QAbstractItemView, QGridLayout, QSizePolicy
+    QScrollArea, QAbstractItemView, QGridLayout, QSizePolicy, QStackedWidget
 )
 from PyQt5.QtCore import Qt, QSignalBlocker, pyqtSignal
 from PyQt5.QtGui import QColor, QFont
@@ -90,7 +90,7 @@ class MonthRangeDialog(QDialog):
     def __init__(self, parent=None, start=None, end=None):
         super().__init__(parent)
         self.setWindowTitle("选择出生年月范围")
-        self.setMinimumWidth(620)
+        self.setMinimumWidth(760)
         self._selected_start = self.normalize_month(start)
         self._selected_end = self.normalize_month(end)
         if self._selected_start and self._selected_end:
@@ -126,12 +126,16 @@ class MonthRangeDialog(QDialog):
         button_box.rejected.connect(self.reject)
         self.ok_button = button_box.button(QDialogButtonBox.Ok)
         self.ok_button.setObjectName("primaryButton")
-        cancel_button = button_box.button(QDialogButtonBox.Cancel)
-        if cancel_button is not None:
-            cancel_button.setObjectName("secondaryButton")
+        self.ok_button.setText("确认")
+        self.cancel_button = button_box.button(QDialogButtonBox.Cancel)
+        if self.cancel_button is not None:
+            self.cancel_button.setObjectName("secondaryButton")
+            self.cancel_button.setText("取消")
         layout.addWidget(button_box)
 
         self.setStyleSheet(DIALOG_BASE_STYLE + DIALOG_BUTTON_STYLE + QUERY_FORM_CONTROL_STYLE)
+        self.start_panel.apply_cell_metrics()
+        self.end_panel.apply_cell_metrics()
 
     def initial_panel_years(self):
         start_year = self.year_part(self._selected_start)
@@ -209,6 +213,12 @@ class MonthPanel(QWidget):
     """单侧年份月份面板。"""
 
     YEAR_PAGE_SIZE = 12
+    MONTH_CELL_WIDTH = 72
+    YEAR_CELL_HEIGHT = 38
+    MONTH_CELL_HEIGHT = YEAR_CELL_HEIGHT
+    MONTH_GRID_SPACING = 10
+    MONTH_GRID_VERTICAL_SPACING = 8
+    MONTH_GRID_COLUMNS = 3
     monthSelected = pyqtSignal(str)
     yearSelected = pyqtSignal(int)
 
@@ -230,19 +240,32 @@ class MonthPanel(QWidget):
 
     def setup_ui(self):
         self.setObjectName("monthPanel")
+        self.content_width = (
+            self.MONTH_GRID_COLUMNS * self.MONTH_CELL_WIDTH
+            + (self.MONTH_GRID_COLUMNS - 1) * self.MONTH_GRID_SPACING
+        )
+        self.grid_height = (
+            4 * self.MONTH_CELL_HEIGHT
+            + 3 * self.MONTH_GRID_VERTICAL_SPACING
+        )
+
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(16, 16, 16, 0)
+        layout.setSpacing(12)
 
         caption = QLabel(self.title)
         caption.setObjectName("monthPanelCaption")
-        layout.addWidget(caption)
+        layout.addWidget(caption, 0, Qt.AlignHCenter)
 
+        self.header_widget = QWidget()
+        self.header_widget.setObjectName("monthPanelHeader")
+        self.header_widget.setFixedWidth(self.content_width)
         header_layout = QHBoxLayout()
-        header_layout.setSpacing(8)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(6)
         self.prev_button = QPushButton("<")
         self.prev_button.setObjectName("monthNavButton")
-        self.prev_button.setFixedSize(30, 28)
+        self.prev_button.setFixedSize(34, 32)
         self.prev_button.clicked.connect(lambda: self.shift_page(-1))
         self.year_button = QPushButton()
         self.year_button.setObjectName("monthYearButton")
@@ -250,44 +273,72 @@ class MonthPanel(QWidget):
         self.year_button.clicked.connect(self.toggle_year_view)
         self.next_button = QPushButton(">")
         self.next_button.setObjectName("monthNavButton")
-        self.next_button.setFixedSize(30, 28)
+        self.next_button.setFixedSize(34, 32)
         self.next_button.clicked.connect(lambda: self.shift_page(1))
         header_layout.addWidget(self.prev_button)
         header_layout.addWidget(self.year_button, 1)
         header_layout.addWidget(self.next_button)
-        layout.addLayout(header_layout)
+        self.header_widget.setLayout(header_layout)
+        layout.addWidget(self.header_widget, 0, Qt.AlignHCenter)
 
         self.month_container = QWidget()
+        self.month_container.setObjectName("monthGridContainer")
+        self.month_container.setFixedSize(self.content_width, self.grid_height)
         month_container_layout = QVBoxLayout(self.month_container)
         month_container_layout.setContentsMargins(0, 0, 0, 0)
         month_grid = QGridLayout()
-        month_grid.setHorizontalSpacing(8)
-        month_grid.setVerticalSpacing(8)
+        month_grid.setHorizontalSpacing(self.MONTH_GRID_SPACING)
+        month_grid.setVerticalSpacing(self.MONTH_GRID_VERTICAL_SPACING)
         for month in range(1, 13):
             button = QPushButton(f"{month:02d}")
             button.setObjectName("monthCell")
-            button.setFixedSize(54, 34)
+            button.setFixedSize(self.MONTH_CELL_WIDTH, self.MONTH_CELL_HEIGHT)
             button.clicked.connect(lambda _, m=month: self.monthSelected.emit(self.month_value(m)))
             self.month_buttons[month] = button
             month_grid.addWidget(button, (month - 1) // 3, (month - 1) % 3)
         month_container_layout.addLayout(month_grid)
-        layout.addWidget(self.month_container)
 
         self.year_container = QWidget()
+        self.year_container.setObjectName("yearGridContainer")
+        self.year_container.setFixedSize(self.content_width, self.grid_height)
         year_container_layout = QVBoxLayout(self.year_container)
         year_container_layout.setContentsMargins(0, 0, 0, 0)
         year_grid = QGridLayout()
-        year_grid.setHorizontalSpacing(8)
-        year_grid.setVerticalSpacing(8)
+        year_grid.setHorizontalSpacing(self.MONTH_GRID_SPACING)
+        year_grid.setVerticalSpacing(self.MONTH_GRID_VERTICAL_SPACING)
         for index in range(self.YEAR_PAGE_SIZE):
             button = QPushButton()
             button.setObjectName("yearCell")
-            button.setFixedSize(54, 34)
+            button.setFixedSize(self.MONTH_CELL_WIDTH, self.YEAR_CELL_HEIGHT)
             button.clicked.connect(lambda _, i=index: self.select_year_from_grid(i))
             self.year_buttons[index] = button
             year_grid.addWidget(button, index // 3, index % 3)
         year_container_layout.addLayout(year_grid)
-        layout.addWidget(self.year_container)
+
+        self.grid_stack = QStackedWidget()
+        self.grid_stack.setObjectName("monthGridStack")
+        self.grid_stack.setFixedSize(self.content_width, self.grid_height)
+        self.grid_stack.addWidget(self.month_container)
+        self.grid_stack.addWidget(self.year_container)
+        layout.addWidget(self.grid_stack, 0, Qt.AlignHCenter)
+
+        layout.addStretch()
+        self.divider = QFrame()
+        self.divider.setObjectName("monthPanelDivider")
+        self.divider.setFixedHeight(1)
+        layout.addWidget(self.divider)
+
+    def apply_cell_metrics(self):
+        self.header_widget.setFixedWidth(self.content_width)
+        self.grid_stack.setFixedSize(self.content_width, self.grid_height)
+        self.month_container.setFixedSize(self.content_width, self.grid_height)
+        self.year_container.setFixedSize(self.content_width, self.grid_height)
+        self.prev_button.setFixedSize(34, 32)
+        self.next_button.setFixedSize(34, 32)
+        for button in self.month_buttons.values():
+            button.setFixedSize(self.MONTH_CELL_WIDTH, self.MONTH_CELL_HEIGHT)
+        for button in self.year_buttons.values():
+            button.setFixedSize(self.MONTH_CELL_WIDTH, self.YEAR_CELL_HEIGHT)
 
     def set_year(self, year):
         self.year = max(self.min_year, min(self.max_year, year))
@@ -329,8 +380,9 @@ class MonthPanel(QWidget):
         self.refresh()
 
     def refresh(self):
-        self.month_container.setVisible(self.view_mode == "month")
-        self.year_container.setVisible(self.view_mode == "year")
+        self.grid_stack.setCurrentWidget(
+            self.year_container if self.view_mode == "year" else self.month_container
+        )
         if self.view_mode == "year":
             page_end = min(self.year_page_start + self.YEAR_PAGE_SIZE - 1, self.max_year)
             self.year_button.setText(f"{self.year_page_start} - {page_end}")

@@ -401,8 +401,14 @@ QComboBox::drop-down {
 }
 QWidget#monthPanel {
     background-color: #ffffff;
-    border: 1px solid #d8dee4;
-    border-radius: 6px;
+    border: 1px solid #E5EAF0;
+    border-radius: 8px;
+}
+QFrame#monthPanelDivider {
+    background-color: #E5EAF0;
+    border: none;
+    min-height: 1px;
+    max-height: 1px;
 }
 QLabel#monthPanelCaption {
     color: #57606a;
@@ -428,23 +434,27 @@ QPushButton#monthYearButton:hover {
 QPushButton#monthNavButton {
     min-height: 0;
     padding: 0;
-    border: 1px solid #d0d7de;
+    border: 1px solid transparent;
     border-radius: 5px;
-    background-color: #f6f8fa;
-    color: #24292f;
+    background-color: transparent;
+    color: #57606a;
+    font-weight: bold;
 }
 QPushButton#monthNavButton:hover {
     background-color: #EAF2FB;
     border-color: #8BB6E8;
+    color: #174A8B;
 }
 QPushButton#monthNavButton:disabled {
-    background-color: #f6f8fa;
+    background-color: transparent;
     color: #c9d1d9;
-    border-color: #eaeef2;
+    border-color: transparent;
 }
 QPushButton#monthCell {
-    min-height: 0;
+    min-height: 36px;
+    max-height: 36px;
     padding: 0;
+    font-size: 13px;
     border: 1px solid #d0d7de;
     border-radius: 5px;
     background-color: #ffffff;
@@ -471,8 +481,10 @@ QPushButton#monthCell:disabled {
     color: #c9d1d9;
 }
 QPushButton#yearCell {
-    min-height: 0;
+    min-height: 36px;
+    max-height: 36px;
     padding: 0;
+    font-size: 13px;
     border: 1px solid #d0d7de;
     border-radius: 5px;
     background-color: #ffffff;
