@@ -81,30 +81,6 @@ body {
 .message {
     margin: 0 0 14px 0;
 }
-.messageTitle {
-    color: #57606A;
-    font-weight: bold;
-    margin-bottom: 5px;
-}
-.messageBody {
-    border: 1px solid #E5EAF0;
-    border-radius: 8px;
-    padding: 10px 12px;
-    background-color: #FFFFFF;
-}
-.userBody {
-    background-color: #EAF2FB;
-    border-color: #8BB6E8;
-    color: #174A8B;
-}
-.assistantBody {
-    background-color: #FFFFFF;
-}
-.errorBody {
-    background-color: #FFF1F0;
-    border-color: #F3B5AD;
-    color: #8F1D16;
-}
 p {
     margin: 0 0 9px 0;
 }
@@ -113,20 +89,6 @@ ul, ol {
 }
 li {
     margin-bottom: 4px;
-}
-table {
-    border-collapse: collapse;
-    width: 100%;
-    margin: 10px 0;
-}
-th, td {
-    border: 1px solid #D0D7DE;
-    padding: 7px 9px;
-}
-th {
-    background-color: #EAF2FB;
-    color: #174A8B;
-    font-weight: bold;
 }
 hr {
     border: 0;
@@ -210,30 +172,105 @@ def render_message_html(role: str, content: str, is_error: bool = False) -> str:
     if is_error:
         body_html = html.escape(str(content)).replace("\n", "<br>")
         title = "分析失败"
-        body_class = "messageBody errorBody"
+        return render_bubble_html(
+            title,
+            body_html,
+            align="left",
+            background="#FFF1F0",
+            border="#F3B5AD",
+            text_color="#8F1D16",
+        )
     elif role == "user":
         body_html = html.escape(str(content)).replace("\n", "<br>")
         title = "我"
-        body_class = "messageBody userBody"
+        return render_bubble_html(
+            title,
+            body_html,
+            align="right",
+            background="#1E5AA8",
+            border="#1E5AA8",
+            text_color="#FFFFFF",
+            title_color="#57606A",
+        )
     else:
         body_html = render_markdown_html(content)
         title = "AI"
-        body_class = "messageBody assistantBody"
+        return render_bubble_html(
+            title,
+            body_html,
+            align="left",
+            background="#F6F8FA",
+            border="#E5EAF0",
+            text_color="#24292F",
+        )
+
+
+def render_bubble_html(
+    title: str,
+    body_html: str,
+    align: str,
+    background: str,
+    border: str,
+    text_color: str,
+    title_color: str = "#57606A",
+) -> str:
+    title_align = "right" if align == "right" else "left"
+    first_cell = ""
+    last_cell = ""
+    content_cell = f"""
+        <td width="76%" align="{title_align}" style="border: none; padding: 0;">
+            <div style="color: {title_color}; font-weight: bold; margin-bottom: 5px; text-align: {title_align};">{title}</div>
+            <div style="background-color: {background}; color: {text_color}; border: 1px solid {border}; border-radius: 8px; padding: 10px 12px; text-align: left;">
+                {body_html}
+            </div>
+        </td>
+    """
+
+    spacer_cell = '<td width="24%" style="border: none; padding: 0;"></td>'
+    if align == "right":
+        first_cell = spacer_cell
+        last_cell = content_cell
+    else:
+        first_cell = content_cell
+        last_cell = spacer_cell
 
     return f"""
     <div class="message">
-        <div class="messageTitle">{title}</div>
-        <div class="{body_class}">{body_html}</div>
+        <table width="100%" cellspacing="0" cellpadding="0" style="border: none; margin: 0;">
+            <tr>
+                {first_cell}
+                {last_cell}
+            </tr>
+        </table>
     </div>
     """
 
 
 def render_markdown_html(content: str) -> str:
     try:
-        return markdown.markdown(str(content), extensions=["extra", "tables"])
+        rendered = markdown.markdown(str(content), extensions=["extra", "tables"])
+        return style_markdown_tables(rendered)
     except Exception as e:
         logger.error("Markdown 渲染失败: %s", e)
         return html.escape(str(content)).replace("\n", "<br>")
+
+
+def style_markdown_tables(rendered_html: str) -> str:
+    return (
+        str(rendered_html)
+        .replace(
+            "<table>",
+            '<table style="border-collapse: collapse; width: 100%; margin: 8px 0;">',
+        )
+        .replace(
+            "<th>",
+            '<th style="border: 1px solid #D0D7DE; padding: 7px 9px; background-color: #EAF2FB; color: #174A8B; font-weight: bold;">',
+        )
+        .replace(
+            "<td>",
+            '<td style="border: 1px solid #D0D7DE; padding: 7px 9px;">',
+        )
+    )
 
 
 class AIChatDialog(QDialog):

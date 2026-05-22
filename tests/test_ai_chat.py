@@ -10,7 +10,7 @@ from services.ai_direct import (
     build_messages,
     build_schema_selection_messages,
 )
-from ui.ai_chat import AIChatDialog, AIWorker, MODEL_PLACEHOLDER
+from ui.ai_chat import AIChatDialog, AIWorker, MODEL_PLACEHOLDER, render_message_html
 from ui.main_window import MainWindow
 from ui.query import QueryTab, build_ai_analysis_payload
 
@@ -271,6 +271,37 @@ class AIChatDirectModelTests(unittest.TestCase):
 
         self.assertEqual(["network failed"], failures)
         self.assertEqual([], finished)
+
+    def test_user_message_renders_as_right_blue_bubble(self):
+        rendered = render_message_html("user", "<script>alert(1)</script>")
+
+        self.assertIn('table width="100%"', rendered)
+        self.assertIn('width="24%"', rendered)
+        self.assertIn('width="76%" align="right"', rendered)
+        self.assertIn("background-color: #1E5AA8", rendered)
+        self.assertIn("color: #FFFFFF", rendered)
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", rendered)
+        self.assertNotIn("<script>alert(1)</script>", rendered)
+
+    def test_ai_message_renders_as_left_bubble_with_markdown_table(self):
+        rendered = render_message_html(
+            "assistant",
+            "| 部门 | 人数 |\n| --- | --- |\n| 研发部 | 2 |",
+        )
+
+        self.assertIn('width="76%" align="left"', rendered)
+        self.assertIn("background-color: #F6F8FA", rendered)
+        self.assertIn('<table style="border-collapse: collapse; width: 100%; margin: 8px 0;">', rendered)
+        self.assertIn('<th style="border: 1px solid #D0D7DE;', rendered)
+        self.assertIn('<td style="border: 1px solid #D0D7DE;', rendered)
+
+    def test_error_message_renders_as_left_red_bubble(self):
+        rendered = render_message_html("assistant", "network failed", is_error=True)
+
+        self.assertIn('width="76%" align="left"', rendered)
+        self.assertIn("background-color: #FFF1F0", rendered)
+        self.assertIn("color: #8F1D16", rendered)
+        self.assertIn("network failed", rendered)
 
     def test_context_label_updates_with_retry_context_and_same_reason(self):
         dialog = AIChatDialog.__new__(AIChatDialog)
