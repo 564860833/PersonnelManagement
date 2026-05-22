@@ -41,6 +41,39 @@ from ui.table_model import ResultTableModel
 logger = logging.getLogger('QueryTab')
 
 
+def build_ai_analysis_payload(results_dict: dict, permissions: dict, assessment_years=None) -> dict:
+    """构建 AI 分析 payload：schema 用于选列，rows 仅供第二阶段分析。"""
+    payload = {
+        "schemas": {},
+        "tables": {},
+    }
+    allowed_tables = [
+        table_name
+        for table_name in TABLE_LABELS.keys()
+        if (permissions or {}).get(table_name)
+    ]
+
+    for table_name in allowed_tables:
+        field_labels = get_table_field_labels(table_name, assessment_years or [])
+        rows = [dict(row) for row in (results_dict or {}).get(table_name, [])]
+        payload["schemas"][table_name] = {
+            "table_name": table_name,
+            "table_label": get_table_label(table_name),
+            "columns": [
+                {"name": field_name, "label": label}
+                for field_name, label in field_labels.items()
+            ],
+        }
+        payload["tables"][table_name] = {
+            "table_name": table_name,
+            "table_label": get_table_label(table_name),
+            "field_labels": dict(field_labels),
+            "rows": rows,
+        }
+
+    return payload
+
+
 def _month_sort_key(value: str):
     """把 yyyy.MM 转为可比较的月份序号。"""
     year, month = value.split(".")
@@ -1023,49 +1056,24 @@ class QueryTab(QWidget):
         启动 AI 分析对话框。
         """
         try:
-            # 1. 获取当前筛选后的数据
-            current_data = self.current_results_dict.get(self.current_table_name, [])
-            if not current_data:
-                QMessageBox.warning(self, "提示", f"当前【{self.get_table_name(self.current_table_name)}】没有数据。")
+            assessment_years = self.db.get_assessment_years() or []
+            analysis_payload = build_ai_analysis_payload(
+                self.current_results_dict,
+                self.permissions,
+                assessment_years,
+            )
+
+            if not analysis_payload["schemas"]:
+                QMessageBox.warning(self, "提示", "当前用户没有可用于 AI 分析的数据表权限。")
                 return
 
-            # 2. 获取该表的所有字段映射 (English Key -> Chinese Header)
-            full_mapping = self.get_full_field_mapping(self.current_table_name)
-
-            # 如果映射为空（异常情况），则直接使用数据库字段名
-            if not full_mapping and current_data:
-                full_mapping = {k: k for k in current_data[0].keys()}
-
-            # 3. 收集当前表完整查询结果中的全部可映射字段。
-            available_fields = set()
-            for row in current_data:
-                available_fields.update(row.keys())
-
-            available_keys = []
-            for db_key in full_mapping.keys():
-                if db_key in available_fields:
-                    available_keys.append(db_key)
-
-            if not available_keys:
-                QMessageBox.warning(self, "提示", "当前表没有可导入 AI 的字段。")
-                return
-
-            analysis_payload = {
-                "table_name": self.current_table_name,
-                "table_label": self.get_table_name(self.current_table_name),
-                "rows": current_data,
-                "selected_fields": available_keys,
-                "field_labels": {key: full_mapping.get(key, key) for key in available_keys},
-            }
-
-            # 4. 打开窗口
             try:
                 if hasattr(self, 'ai_dialog') and self.ai_dialog is not None:
                     self.ai_dialog.close()
 
                 from ui.ai_chat import AIChatDialog
                 self.ai_dialog = AIChatDialog(analysis_payload, self)
-                self.ai_dialog.setWindowTitle(f"智能分析 - {self.get_table_name(self.current_table_name)}")
+                self.ai_dialog.setWindowTitle("智能分析 - 查询结果")
                 self.ai_dialog.show()
 
             except Exception as e:

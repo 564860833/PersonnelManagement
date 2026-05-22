@@ -1,37 +1,82 @@
 import inspect
+import json
 import unittest
 from unittest.mock import patch
 
-from services.ai_direct import ask_model, build_messages
+from services.ai_direct import (
+    SELECTION_FAILURE_MESSAGE,
+    ask_model,
+    build_messages,
+    build_schema_selection_messages,
+)
 from ui.ai_chat import AIChatDialog, AIWorker
+from ui.query import build_ai_analysis_payload
 
 
 FIELD_LABELS = {
     "sequence": "序号",
     "name": "姓名",
     "department": "部门",
+    "current_grade": "职级/等级",
 }
 
 
 def payload():
     return {
-        "table_name": "base_info",
-        "table_label": "人员基本信息",
-        "rows": [
-            {"sequence": 1, "name": "张三", "department": "研发部"},
-            {"sequence": 2, "name": "李四", "department": "综合部"},
-        ],
-        "selected_fields": ["sequence", "name", "department"],
-        "field_labels": FIELD_LABELS,
+        "schemas": {
+            "base_info": {
+                "table_name": "base_info",
+                "table_label": "人员基本信息",
+                "columns": [
+                    {"name": "sequence", "label": "序号"},
+                    {"name": "name", "label": "姓名"},
+                    {"name": "department", "label": "部门"},
+                    {"name": "current_grade", "label": "职级/等级"},
+                ],
+            },
+            "rewards": {
+                "table_name": "rewards",
+                "table_label": "人员奖惩信息",
+                "columns": [
+                    {"name": "sequence", "label": "序号"},
+                    {"name": "name", "label": "姓名"},
+                    {"name": "reward_name", "label": "奖励名称"},
+                ],
+            },
+        },
+        "tables": {
+            "base_info": {
+                "table_name": "base_info",
+                "table_label": "人员基本信息",
+                "field_labels": FIELD_LABELS,
+                "rows": [
+                    {"sequence": 1, "name": "张三", "department": "研发部", "current_grade": "一级"},
+                    {"sequence": 2, "name": "李四", "department": "综合部", "current_grade": "二级"},
+                ],
+            },
+            "rewards": {
+                "table_name": "rewards",
+                "table_label": "人员奖惩信息",
+                "field_labels": {
+                    "sequence": "序号",
+                    "name": "姓名",
+                    "reward_name": "奖励名称",
+                },
+                "rows": [],
+            },
+        },
     }
 
 
 class FakeResponse:
+    def __init__(self, content):
+        self.content = content
+
     def raise_for_status(self):
         return None
 
     def json(self):
-        return {"message": {"content": "已收到表数据。"}}
+        return {"message": {"content": self.content}}
 
 
 class AIChatDirectModelTests(unittest.TestCase):
@@ -51,87 +96,171 @@ class AIChatDirectModelTests(unittest.TestCase):
         self.assertNotIn("session_state", source)
         self.assertNotIn("clean_ai_response", source)
 
-    def test_build_messages_imports_current_table_data(self):
-        messages = build_messages("张三在哪个部门？", payload())
+    def test_build_ai_analysis_payload_keeps_permitted_schema_with_empty_rows(self):
+        results = {
+            "base_info": [{"sequence": 1, "name": "张三"}],
+            "family": [],
+        }
+        permissions = {
+            "base_info": True,
+            "rewards": False,
+            "family": True,
+            "resume": True,
+        }
+
+        analysis_payload = build_ai_analysis_payload(results, permissions)
+
+        self.assertEqual({"base_info", "family", "resume"}, set(analysis_payload["schemas"].keys()))
+        self.assertEqual({"base_info", "family", "resume"}, set(analysis_payload["tables"].keys()))
+        self.assertNotIn("rewards", analysis_payload["schemas"])
+        self.assertEqual([], analysis_payload["tables"]["family"]["rows"])
+        self.assertEqual([], analysis_payload["tables"]["resume"]["rows"])
+        self.assertIn({"name": "resume_text", "label": "简历信息"}, analysis_payload["schemas"]["resume"]["columns"])
+        self.assertEqual("张三", analysis_payload["tables"]["base_info"]["rows"][0]["name"])
+
+    def test_schema_selection_messages_do_not_include_table_rows(self):
+        messages = build_schema_selection_messages("按部门分析人员情况", payload())
         all_text = "\n".join(message["content"] for message in messages)
 
         self.assertEqual("system", messages[0]["role"])
-        self.assertEqual("user", messages[1]["role"])
-        self.assertIn("人员基本信息 (base_info)", all_text)
-        self.assertIn('"field": "name"', all_text)
-        self.assertIn('"label": "姓名"', all_text)
-        self.assertIn('"name": "张三"', all_text)
-        self.assertIn('"name": "李四"', all_text)
-        self.assertIn("张三在哪个部门？", all_text)
-        for old_pipeline_text in ("规则", "统计口径", "工具调用", "QueryPlan"):
-            self.assertNotIn(old_pipeline_text, all_text)
+        self.assertEqual("user", messages[-1]["role"])
+        self.assertIn('"schemas"', all_text)
+        self.assertIn('"table_name": "base_info"', all_text)
+        self.assertIn('"name": "department"', all_text)
+        self.assertNotIn('"rows"', all_text)
+        self.assertNotIn("张三", all_text)
+        self.assertNotIn("研发部", all_text)
 
-    def test_build_messages_includes_recent_dialog_history(self):
+    def test_build_messages_uses_filtered_data_and_history(self):
+        filtered_payload = {
+            "tables": {
+                "base_info": {
+                    "table_name": "base_info",
+                    "table_label": "人员基本信息",
+                    "field_labels": {
+                        "sequence": "序号",
+                        "name": "姓名",
+                        "department": "部门",
+                    },
+                    "rows": [{"sequence": 1, "name": "张三", "department": "研发部"}],
+                }
+            }
+        }
         history = [
-            {"role": "user", "content": "张三在哪个部门？"},
-            {"role": "assistant", "content": "张三在研发部。"},
+            {"role": "user", "content": "上一轮问题"},
+            {"role": "assistant", "content": "上一轮回答"},
             {"role": "system", "content": "这条不应进入历史。"},
-            {"role": "assistant", "content": "  "},
         ]
 
-        messages = build_messages("那他叫什么名字？", payload(), history)
+        messages = build_messages("张三在哪个部门？", filtered_payload, history)
+        all_text = "\n".join(message["content"] for message in messages)
 
-        self.assertEqual("system", messages[0]["role"])
-        self.assertEqual({"role": "user", "content": "张三在哪个部门？"}, messages[1])
-        self.assertEqual({"role": "assistant", "content": "张三在研发部。"}, messages[2])
-        self.assertEqual("user", messages[-1]["role"])
-        self.assertIn("那他叫什么名字？", messages[-1]["content"])
-        self.assertIn('"name": "张三"', messages[-1]["content"])
-        self.assertNotIn("这条不应进入历史", "\n".join(message["content"] for message in messages))
+        self.assertEqual({"role": "user", "content": "上一轮问题"}, messages[1])
+        self.assertEqual({"role": "assistant", "content": "上一轮回答"}, messages[2])
+        self.assertIn("筛选后的数据", all_text)
+        self.assertIn("只能基于“筛选后的数据”回答", all_text)
+        self.assertIn('"department": "研发部"', all_text)
+        self.assertNotIn("这条不应进入历史", all_text)
+        self.assertNotIn("current_grade", all_text)
 
-    def test_build_messages_keeps_only_last_ten_rounds(self):
+    def test_history_keeps_recent_ten_rounds_as_twenty_messages(self):
         history = []
         for index in range(12):
             history.append({"role": "user", "content": f"问题{index}"})
             history.append({"role": "assistant", "content": f"回答{index}"})
 
-        messages = build_messages("继续分析", payload(), history)
+        messages = build_messages("继续分析", {"tables": {}}, history)
         retained_history = messages[1:-1]
 
         self.assertEqual(20, len(retained_history))
         self.assertEqual({"role": "user", "content": "问题2"}, retained_history[0])
         self.assertEqual({"role": "assistant", "content": "回答11"}, retained_history[-1])
 
-    def test_ask_model_posts_to_ollama_chat(self):
-        with patch("services.ai_direct.requests.post", return_value=FakeResponse()) as post:
-            answer = ask_model("当前表有谁？", payload(), "qwen2:latest", n_ctx=8192, timeout=5)
+    def test_ask_model_uses_two_stage_filtered_analysis(self):
+        selection = json.dumps(
+            {
+                "tables": [
+                    {"table_name": "base_info", "columns": ["department"]},
+                    {"table_name": "rewards", "columns": ["reward_name"]},
+                ]
+            },
+            ensure_ascii=False,
+        )
 
-        self.assertEqual("已收到表数据。", answer)
+        with patch(
+            "services.ai_direct.requests.post",
+            side_effect=[FakeResponse(selection), FakeResponse("正式分析结果")],
+        ) as post:
+            answer = ask_model("按部门和奖励分析人员情况", payload(), "qwen2:latest", n_ctx=8192, timeout=5)
+
+        self.assertEqual("正式分析结果", answer)
+        self.assertEqual(2, post.call_count)
+
+        first_body = post.call_args_list[0].kwargs["json"]
+        first_text = "\n".join(message["content"] for message in first_body["messages"])
+        self.assertIn('"schemas"', first_text)
+        self.assertNotIn('"rows"', first_text)
+        self.assertNotIn("张三", first_text)
+        self.assertNotIn("研发部", first_text)
+
+        second_body = post.call_args_list[1].kwargs["json"]
+        second_text = "\n".join(message["content"] for message in second_body["messages"])
+        self.assertEqual("qwen2:latest", second_body["model"])
+        self.assertEqual({"num_ctx": 8192}, second_body["options"])
+        self.assertIn('"sequence": 1', second_text)
+        self.assertIn('"name": "张三"', second_text)
+        self.assertIn('"department": "研发部"', second_text)
+        self.assertIn('"table_name": "rewards"', second_text)
+        self.assertIn('"rows": []', second_text)
+        self.assertNotIn("current_grade", second_text)
+        self.assertNotIn("一级", second_text)
+
+    def test_ask_model_drops_invalid_tables_and_columns(self):
+        selection = json.dumps(
+            {
+                "tables": [
+                    {"table_name": "unknown", "columns": ["name"]},
+                    {"table_name": "base_info", "columns": ["not_real"]},
+                ]
+            },
+            ensure_ascii=False,
+        )
+
+        with patch("services.ai_direct.requests.post", return_value=FakeResponse(selection)) as post:
+            answer = ask_model("分析不存在的字段", payload(), "qwen2:latest", timeout=5)
+
+        self.assertEqual(SELECTION_FAILURE_MESSAGE, answer)
         post.assert_called_once()
-        url = post.call_args.args[0]
-        body = post.call_args.kwargs["json"]
-        self.assertTrue(url.endswith("/api/chat"))
-        self.assertEqual("qwen2:latest", body["model"])
-        self.assertFalse(body["stream"])
-        self.assertEqual({"num_ctx": 8192}, body["options"])
-        self.assertEqual("当前表有谁？", body["messages"][1]["content"].split("用户问题：\n", 1)[1])
 
-    def test_ask_model_posts_dialog_history_to_ollama_chat(self):
+    def test_ask_model_posts_dialog_history_to_both_stages(self):
+        selection = json.dumps(
+            {"tables": [{"table_name": "base_info", "columns": ["department"]}]},
+            ensure_ascii=False,
+        )
         history = [
-            {"role": "user", "content": "张三在哪个部门？"},
-            {"role": "assistant", "content": "张三在研发部。"},
+            {"role": "user", "content": "上一轮问题"},
+            {"role": "assistant", "content": "上一轮回答"},
         ]
 
-        with patch("services.ai_direct.requests.post", return_value=FakeResponse()) as post:
+        with patch(
+            "services.ai_direct.requests.post",
+            side_effect=[FakeResponse(selection), FakeResponse("已结合历史回答。")],
+        ) as post:
             answer = ask_model(
-                "那他叫什么名字？",
+                "继续分析",
                 payload(),
                 "qwen2:latest",
                 timeout=5,
                 history_messages=history,
             )
 
-        self.assertEqual("已收到表数据。", answer)
-        body = post.call_args.kwargs["json"]
-        self.assertEqual(history[0], body["messages"][1])
-        self.assertEqual(history[1], body["messages"][2])
-        self.assertIn('"name": "张三"', body["messages"][-1]["content"])
-        self.assertEqual("那他叫什么名字？", body["messages"][-1]["content"].split("用户问题：\n", 1)[1])
+        self.assertEqual("已结合历史回答。", answer)
+        first_messages = post.call_args_list[0].kwargs["json"]["messages"]
+        second_messages = post.call_args_list[1].kwargs["json"]["messages"]
+        self.assertEqual(history[0], first_messages[1])
+        self.assertEqual(history[1], first_messages[2])
+        self.assertEqual(history[0], second_messages[1])
+        self.assertEqual(history[1], second_messages[2])
 
     def test_ask_model_requires_model_name(self):
         with self.assertRaises(ValueError):

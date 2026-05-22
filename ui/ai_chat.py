@@ -181,7 +181,7 @@ class AIChatDialog(QDialog):
         self.chat_history.append(f"<b>我:</b> {question}")
         self.input_field.clear()
         self.send_btn.setEnabled(False)
-        self.status_label.setText("AI 正在调用模型...")
+        self.status_label.setText("AI 正在选择数据列并分析...")
         history_snapshot = [dict(message) for message in self.history_messages]
         self.history_messages.append({"role": "user", "content": question})
 

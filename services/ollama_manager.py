@@ -1,6 +1,7 @@
 """Helpers for using an app-local Ollama models directory."""
 
 import atexit
+import ctypes
 import logging
 import os
 import shutil
@@ -9,7 +10,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import requests
 
@@ -21,6 +22,7 @@ APP_OLLAMA_URL = f"http://{APP_OLLAMA_HOST}"
 APP_OLLAMA_RUNTIME_DIR = "ollama"
 
 _started_process: Optional[subprocess.Popen] = None
+_started_models_dir: Optional[Path] = None
 
 
 @dataclass
@@ -161,7 +163,7 @@ def find_ollama_executable() -> Optional[str]:
 
 
 def start_ollama_serve(executable: str, models_dir: Path) -> bool:
-    global _started_process
+    global _started_models_dir, _started_process
 
     env = os.environ.copy()
     env["OLLAMA_HOST"] = APP_OLLAMA_HOST
@@ -177,33 +179,168 @@ def start_ollama_serve(executable: str, models_dir: Path) -> bool:
             env=env,
             creationflags=creationflags,
         )
+        _started_models_dir = models_dir
         logger.info("已启动程序专用 Ollama 服务: host=%s, models=%s", APP_OLLAMA_HOST, models_dir)
         return True
     except Exception as e:
         _started_process = None
+        _started_models_dir = None
         logger.error("启动 Ollama 服务失败: %s", e)
         return False
 
 
 def stop_started_ollama():
-    """Stop only the Ollama process started by this application instance."""
-    global _started_process
+    """Stop the Ollama service and model runners started by this app."""
+    global _started_models_dir, _started_process
 
     process = _started_process
     if process is None:
+        if _started_models_dir is not None:
+            _stop_ollama_runners_for_models_dir(_started_models_dir)
+            _started_models_dir = None
         return
     if process.poll() is not None:
+        if _started_models_dir is not None:
+            _stop_ollama_runners_for_models_dir(_started_models_dir)
+            _started_models_dir = None
         _started_process = None
         return
 
     try:
-        process.terminate()
-        process.wait(timeout=5)
+        _terminate_process_tree(process)
+        if _started_models_dir is not None:
+            _stop_ollama_runners_for_models_dir(_started_models_dir)
         logger.info("已停止程序专用 Ollama 服务")
     except Exception as e:
         logger.debug("停止程序专用 Ollama 服务失败: %s", e)
     finally:
         _started_process = None
+        _started_models_dir = None
+
+
+def _terminate_process_tree(process: subprocess.Popen):
+    if os.name == "nt":
+        _terminate_windows_process_tree(process)
+        return
+
+    if process.poll() is not None:
+        return
+
+    try:
+        process.terminate()
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=5)
+
+
+def _terminate_windows_process_tree(process: subprocess.Popen):
+    pid = getattr(process, "pid", None)
+    if not pid:
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=5)
+        return
+
+    child_pids = _windows_descendant_pids(pid)
+    if process.poll() is None:
+        _taskkill_pid(pid, include_tree=True)
+    for child_pid in reversed(child_pids):
+        _taskkill_pid(child_pid, include_tree=True)
+
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        _taskkill_pid(pid, include_tree=False)
+        process.wait(timeout=5)
+
+
+def _taskkill_pid(pid: int, include_tree: bool = False):
+    command = ["taskkill", "/PID", str(pid), "/F"]
+    if include_tree:
+        command.insert(1, "/T")
+    subprocess.run(
+        command,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        check=False,
+    )
+
+
+def _windows_descendant_pids(root_pid: int) -> List[int]:
+    if os.name != "nt":
+        return []
+
+    children_by_parent = _windows_children_by_parent()
+    descendants = []
+    stack = list(children_by_parent.get(root_pid, []))
+    while stack:
+        pid = stack.pop()
+        descendants.append(pid)
+        stack.extend(children_by_parent.get(pid, []))
+    return descendants
+
+
+def _windows_children_by_parent() -> Dict[int, List[int]]:
+    TH32CS_SNAPPROCESS = 0x00000002
+    INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+
+    class PROCESSENTRY32(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", ctypes.c_uint32),
+            ("cntUsage", ctypes.c_uint32),
+            ("th32ProcessID", ctypes.c_uint32),
+            ("th32DefaultHeapID", ctypes.c_void_p),
+            ("th32ModuleID", ctypes.c_uint32),
+            ("cntThreads", ctypes.c_uint32),
+            ("th32ParentProcessID", ctypes.c_uint32),
+            ("pcPriClassBase", ctypes.c_long),
+            ("dwFlags", ctypes.c_uint32),
+            ("szExeFile", ctypes.c_wchar * 260),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    if snapshot == INVALID_HANDLE_VALUE:
+        return {}
+
+    try:
+        entry = PROCESSENTRY32()
+        entry.dwSize = ctypes.sizeof(PROCESSENTRY32)
+        children_by_parent: Dict[int, List[int]] = {}
+        if not kernel32.Process32FirstW(snapshot, ctypes.byref(entry)):
+            return children_by_parent
+
+        while True:
+            children_by_parent.setdefault(int(entry.th32ParentProcessID), []).append(int(entry.th32ProcessID))
+            if not kernel32.Process32NextW(snapshot, ctypes.byref(entry)):
+                break
+        return children_by_parent
+    finally:
+        kernel32.CloseHandle(snapshot)
+
+
+def _stop_ollama_runners_for_models_dir(models_dir: Path):
+    if os.name != "nt":
+        return
+
+    models_path = str(models_dir.resolve())
+    script = (
+        "$models = $args[0]; "
+        "Get-CimInstance Win32_Process -Filter \"name = 'ollama.exe'\" | "
+        "Where-Object { $_.CommandLine -and $_.CommandLine.Contains(' runner ') -and $_.CommandLine.Contains($models) } | "
+        "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+    )
+    subprocess.run(
+        ["powershell", "-NoProfile", "-Command", script, models_path],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        check=False,
+    )
 
 
 def wait_for_ollama(timeout: float = 8.0) -> Tuple[bool, List[str]]:

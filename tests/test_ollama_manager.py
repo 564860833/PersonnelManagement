@@ -20,6 +20,7 @@ class FakeProcess:
 class OllamaManagerTests(unittest.TestCase):
     def tearDown(self):
         ollama_manager._started_process = None
+        ollama_manager._started_models_dir = None
 
     def test_api_url_uses_app_dedicated_host(self):
         with patch.dict("os.environ", {"OLLAMA_HOST": "http://192.168.1.10:11434"}):
@@ -56,6 +57,23 @@ class OllamaManagerTests(unittest.TestCase):
             self.assertEqual(["ollama.exe", "serve"], captured["command"])
             self.assertEqual(ollama_manager.APP_OLLAMA_HOST, captured["env"]["OLLAMA_HOST"])
             self.assertEqual(str(models_dir), captured["env"]["OLLAMA_MODELS"])
+            self.assertEqual(models_dir, ollama_manager._started_models_dir)
+
+    def test_stop_started_ollama_stops_process_tree_and_model_runners(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            models_dir = Path(temp_dir) / "models"
+            process = FakeProcess()
+            ollama_manager._started_process = process
+            ollama_manager._started_models_dir = models_dir
+
+            with patch.object(ollama_manager, "_terminate_process_tree") as terminate_tree, \
+                    patch.object(ollama_manager, "_stop_ollama_runners_for_models_dir") as stop_runners:
+                ollama_manager.stop_started_ollama()
+
+            terminate_tree.assert_called_once_with(process)
+            stop_runners.assert_called_once_with(models_dir)
+            self.assertIsNone(ollama_manager._started_process)
+            self.assertIsNone(ollama_manager._started_models_dir)
 
 
 if __name__ == "__main__":

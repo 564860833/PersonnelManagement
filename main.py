@@ -108,7 +108,6 @@ def main():
 
         # 直接进入初始化流程
         logger.info("应用程序启动")
-        initialize_ollama_for_local_models()
 
         # 初始化数据库
         logger.info("正在初始化数据库...")
