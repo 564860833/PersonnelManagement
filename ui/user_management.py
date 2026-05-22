@@ -1,7 +1,9 @@
 from PyQt5.QtWidgets import (QDialog, QLabel, QLineEdit, QPushButton, QVBoxLayout,
                              QHBoxLayout, QMessageBox, QGroupBox, QCheckBox,
-                             QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView)
-from PyQt5.QtCore import Qt
+                             QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
+                             QApplication, QStyle, QStyledItemDelegate, QStyleOptionViewItem)
+from PyQt5.QtCore import QLineF, QRect, QRectF, QSize, Qt
+from PyQt5.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 import logging
 import sqlite3
 from metadata.constants import TABLE_LABELS
@@ -9,6 +11,63 @@ from ui.confirm_dialog import confirm_danger
 from ui.styles import DIALOG_BASE_STYLE, DIALOG_BUTTON_STYLE, RESULT_TABLE_STYLE
 
 logger = logging.getLogger('UserMgr')
+
+
+def _permission_icon(enabled: bool) -> QIcon:
+    pixmap = QPixmap(24, 24)
+    pixmap.fill(Qt.transparent)
+
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.Antialiasing)
+    painter.setPen(Qt.NoPen)
+    painter.setBrush(QColor("#16A34A" if enabled else "#DC2626"))
+    painter.drawEllipse(QRectF(2, 2, 20, 20))
+
+    pen = QPen(QColor("#FFFFFF"), 2.4, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+    painter.setPen(pen)
+    if enabled:
+        painter.drawLine(QLineF(7.2, 12.2, 10.5, 15.5))
+        painter.drawLine(QLineF(10.5, 15.5, 16.8, 8.8))
+    else:
+        painter.drawLine(QLineF(8.2, 8.2, 15.8, 15.8))
+        painter.drawLine(QLineF(15.8, 8.2, 8.2, 15.8))
+    painter.end()
+
+    return QIcon(pixmap)
+
+
+def _permission_item(enabled: bool) -> QTableWidgetItem:
+    item = QTableWidgetItem()
+    item.setIcon(_permission_icon(enabled))
+    item.setToolTip("有权限" if enabled else "无权限")
+    item.setTextAlignment(Qt.AlignCenter)
+    return item
+
+
+class CenteredIconDelegate(QStyledItemDelegate):
+    def paint(self, painter, option, index):
+        icon = index.data(Qt.DecorationRole)
+        text = index.data(Qt.DisplayRole)
+        if isinstance(icon, QIcon) and not icon.isNull() and not text:
+            opt = QStyleOptionViewItem(option)
+            self.initStyleOption(opt, index)
+            opt.text = ""
+            opt.icon = QIcon()
+
+            style = opt.widget.style() if opt.widget is not None else QApplication.style()
+            style.drawControl(QStyle.CE_ItemViewItem, opt, painter, opt.widget)
+
+            icon_size = QSize(24, 24)
+            icon_rect = QRect(
+                option.rect.x() + (option.rect.width() - icon_size.width()) // 2,
+                option.rect.y() + (option.rect.height() - icon_size.height()) // 2,
+                icon_size.width(),
+                icon_size.height(),
+            )
+            icon.paint(painter, icon_rect, Qt.AlignCenter)
+            return
+
+        super().paint(painter, option, index)
 
 
 class AddUserDialog(QDialog):
@@ -132,7 +191,7 @@ class UserManagementDialog(QDialog):
         super().__init__()
         self.db = db
         self.setWindowTitle("用户账号管理")
-        self.setMinimumSize(900, 480)
+        self.setMinimumSize(980, 480)
         self.setup_ui()
         self.load_users()
 
@@ -145,8 +204,9 @@ class UserManagementDialog(QDialog):
         # 用户列表
         self.user_table = QTableWidget()
         self.user_table.setColumnCount(len(TABLE_LABELS) + 1)
+        self.user_table.setIconSize(QSize(24, 24))
         self.user_table.setHorizontalHeaderLabels(["用户名"] + [f"{label}表" for label in TABLE_LABELS.values()])
-        self.user_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.configure_user_table_columns()
         self.user_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.user_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.user_table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -179,6 +239,21 @@ class UserManagementDialog(QDialog):
         layout.addLayout(btn_layout)
         self.setLayout(layout)
 
+    def configure_user_table_columns(self):
+        header = self.user_table.horizontalHeader()
+        header.setDefaultAlignment(Qt.AlignCenter)
+        header.setStretchLastSection(False)
+
+        self.user_table.setColumnWidth(0, 160)
+        header.setSectionResizeMode(0, QHeaderView.Interactive)
+
+        self.permission_icon_delegate = CenteredIconDelegate(self.user_table)
+        for col, table_name in enumerate(TABLE_LABELS, start=1):
+            width = 210 if table_name == "family" else 170
+            self.user_table.setColumnWidth(col, width)
+            header.setSectionResizeMode(col, QHeaderView.Interactive)
+            self.user_table.setItemDelegateForColumn(col, self.permission_icon_delegate)
+
     def load_users(self):
         """从数据库加载所有用户（除了admin）"""
         try:
@@ -196,7 +271,7 @@ class UserManagementDialog(QDialog):
                 # 填充表格
                 self.user_table.setItem(row, 0, QTableWidgetItem(username))
                 for col, table_name in enumerate(TABLE_LABELS, start=1):
-                    self.user_table.setItem(row, col, QTableWidgetItem("✓" if permissions[table_name] else "✗"))
+                    self.user_table.setItem(row, col, _permission_item(permissions[table_name]))
 
                 # 设置居中
                 for col in range(1, len(TABLE_LABELS) + 1):
