@@ -167,15 +167,39 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'status_bar'):
             self.status_bar.showMessage(message, timeout)
 
-    def run_background_task(self, title: str, task_fn, on_success=None, on_error=None):
+    def _modern_progress_dialog_factory(self, title: str, message: str, icon_kind: str):
+        """创建现代加载弹窗工厂，供特定后台任务覆盖默认进度框。"""
+        def factory(parent, _task_title):
+            from ui.loading_dialog import ModernLoadingDialog
+
+            return ModernLoadingDialog(
+                parent,
+                title=title,
+                message=message,
+                icon_kind=icon_kind,
+            )
+
+        return factory
+
+    def run_background_task(
+        self,
+        title: str,
+        task_fn,
+        on_success=None,
+        on_error=None,
+        progress_dialog_factory=None,
+    ):
         """在线程中执行耗时任务，并显示忙碌进度框。"""
-        progress = QProgressDialog(title, "", 0, 0, self)
-        progress.setWindowTitle("请稍候")
-        progress.setWindowModality(Qt.WindowModal)
-        progress.setCancelButton(None)
-        progress.setMinimumDuration(0)
-        progress.setAutoClose(False)
-        progress.setAutoReset(False)
+        if progress_dialog_factory is not None:
+            progress = progress_dialog_factory(self, title)
+        else:
+            progress = QProgressDialog(title, "", 0, 0, self)
+            progress.setWindowTitle("请稍候")
+            progress.setWindowModality(Qt.WindowModal)
+            progress.setCancelButton(None)
+            progress.setMinimumDuration(0)
+            progress.setAutoClose(False)
+            progress.setAutoReset(False)
         progress.show()
 
         thread = QThread(self)
@@ -272,10 +296,15 @@ class MainWindow(QMainWindow):
                 )
 
             self.run_background_task(
-                f"正在导出{chinese_name}...",
+                "正在导出数据",
                 export_task,
                 handle_export_success,
                 handle_export_error,
+                progress_dialog_factory=self._modern_progress_dialog_factory(
+                    "正在导出数据",
+                    f"正在生成{chinese_name} Excel 文件，请稍候...",
+                    "export",
+                ),
             )
 
         except Exception as e:
@@ -441,10 +470,15 @@ class MainWindow(QMainWindow):
                 self.set_status(f"导入失败：{table_label}，{message}")
 
             self.run_background_task(
-                f"正在{mode_label}{table_label}...",
+                "正在导入数据",
                 import_task,
                 handle_import_success,
                 handle_import_error,
+                progress_dialog_factory=self._modern_progress_dialog_factory(
+                    "正在导入数据",
+                    f"正在{mode_label}{table_label}，请稍候...",
+                    "import",
+                ),
             )
 
         def handle_preview_error(message: str):
@@ -457,10 +491,15 @@ class MainWindow(QMainWindow):
             self.set_status(f"导入异常：{table_label}，请查看日志")
 
         self.run_background_task(
-            f"正在读取{table_label}数据...",
+            "正在读取数据",
             preview_task,
             handle_preview_success,
             handle_preview_error,
+            progress_dialog_factory=self._modern_progress_dialog_factory(
+                "正在读取数据",
+                f"正在解析{table_label}导入文件，请稍候...",
+                "import",
+            ),
         )
 
     def on_clear_database(self):

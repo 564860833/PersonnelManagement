@@ -17,7 +17,7 @@ from PyQt5.QtWidgets import (
 
 from services.ai_context import next_context_length, recommend_context_length
 from services.ai_direct import ask_model, is_context_length_error
-from services.ollama_manager import APP_OLLAMA_HOST, ensure_ollama_ready, fetch_ollama_models
+from services.ollama_manager import APP_OLLAMA_HOST, fetch_ollama_models
 from ui.styles import DIALOG_BASE_STYLE, DIALOG_BUTTON_STYLE
 
 logger = logging.getLogger("AIChat")
@@ -114,26 +114,16 @@ class AIChatDialog(QDialog):
     def refresh_models(self):
         self.model_combo.blockSignals(True)
         self.model_combo.clear()
-        status = ensure_ollama_ready(start_if_needed=True)
-        models = status.service_models
+        available, models = fetch_ollama_models(timeout=3)
         if models:
             self.model_combo.addItems(models)
-            if status.warning and status.local_model_names:
-                self.status_label.setText(f"专用 Ollama 端口 {APP_OLLAMA_HOST} 已占用，但未加载程序目录 models")
-            else:
-                detail = f"已识别到 {len(models)} 个模型"
-                if status.local_models_dir:
-                    detail += "，使用程序目录 models"
-                detail += f"，端口 {APP_OLLAMA_HOST}"
-                self.status_label.setText(f"就绪 ({detail})")
+            self.status_label.setText(f"就绪 (已识别到 {len(models)} 个模型，端口 {APP_OLLAMA_HOST})")
         else:
             self.model_combo.addItem("未检测到可用模型")
-            if status.local_model_names and status.service_available:
-                self.status_label.setText(f"专用 Ollama 端口 {APP_OLLAMA_HOST} 已占用，但未加载程序目录 models")
-            elif status.local_model_names:
-                self.status_label.setText(f"检测到程序目录 models，但无法启动或连接专用 Ollama ({APP_OLLAMA_HOST})")
+            if available:
+                self.status_label.setText(f"Ollama 已连接，但未检测到可用模型 ({APP_OLLAMA_HOST})")
             else:
-                self.status_label.setText("未检测到模型；请确认程序目录 models")
+                self.status_label.setText(f"无法连接专用 Ollama ({APP_OLLAMA_HOST})")
         self.model_combo.blockSignals(False)
         self.refresh_context_recommendation()
 

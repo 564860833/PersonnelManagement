@@ -37,6 +37,7 @@ from ui.styles import (
     button_style,
 )
 from ui.table_model import ResultTableModel
+from services.ollama_manager import ensure_ollama_ready
 
 logger = logging.getLogger('QueryTab')
 
@@ -1068,13 +1069,11 @@ class QueryTab(QWidget):
                 return
 
             try:
-                if hasattr(self, 'ai_dialog') and self.ai_dialog is not None:
-                    self.ai_dialog.close()
-
-                from ui.ai_chat import AIChatDialog
-                self.ai_dialog = AIChatDialog(analysis_payload, self)
-                self.ai_dialog.setWindowTitle("智能分析 - 查询结果")
-                self.ai_dialog.show()
+                status = ensure_ollama_ready(start_if_needed=False)
+                if status.service_available:
+                    self.open_ai_dialog(analysis_payload)
+                else:
+                    self.start_ollama_then_open_ai(analysis_payload)
 
             except Exception as e:
                 logger.exception("AI Dialog Error")
@@ -1083,6 +1082,59 @@ class QueryTab(QWidget):
         except Exception as e:
             logger.exception("AI Logic Error")
             QMessageBox.critical(self, "错误", f"AI分析准备阶段出错：\n{str(e)}")
+
+    def start_ollama_then_open_ai(self, analysis_payload):
+        """启动专用 Ollama 服务，完成后再打开 AI 分析窗口。"""
+        main_window = self.window()
+
+        def task():
+            return ensure_ollama_ready(start_if_needed=True)
+
+        def on_success(status):
+            self.handle_ollama_started_for_ai(status, analysis_payload)
+
+        def on_error(message):
+            QMessageBox.critical(self, "Ollama 启动失败", message)
+
+        if hasattr(main_window, "run_background_task"):
+            from ui.loading_dialog import ModernLoadingDialog
+
+            def progress_dialog_factory(parent, _title):
+                return ModernLoadingDialog(
+                    parent,
+                    title="正在启动 Ollama",
+                    message="正在连接本地 AI 服务，请稍候...",
+                )
+
+            main_window.run_background_task(
+                "正在启动 Ollama，请稍候...",
+                task,
+                on_success=on_success,
+                on_error=on_error,
+                progress_dialog_factory=progress_dialog_factory,
+            )
+            return
+
+        on_success(task())
+
+    def handle_ollama_started_for_ai(self, status, analysis_payload):
+        """根据 Ollama 启动结果打开 AI 分析窗口或提示错误。"""
+        if getattr(status, "service_available", False):
+            self.open_ai_dialog(analysis_payload)
+            return
+
+        message = getattr(status, "message", "Ollama 未能启动或连接。")
+        QMessageBox.warning(self, "Ollama 启动提示", message)
+
+    def open_ai_dialog(self, analysis_payload):
+        """创建并显示 AI 分析窗口。"""
+        if hasattr(self, 'ai_dialog') and self.ai_dialog is not None:
+            self.ai_dialog.close()
+
+        from ui.ai_chat import AIChatDialog
+        self.ai_dialog = AIChatDialog(analysis_payload, self)
+        self.ai_dialog.setWindowTitle("智能分析 - 查询结果")
+        self.ai_dialog.show()
 
     def show_table_data(self, table_name: str):
         """显示指定表的数据"""

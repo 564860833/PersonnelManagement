@@ -11,7 +11,8 @@ from services.ai_direct import (
     build_schema_selection_messages,
 )
 from ui.ai_chat import AIChatDialog, AIWorker
-from ui.query import build_ai_analysis_payload
+from ui.main_window import MainWindow
+from ui.query import QueryTab, build_ai_analysis_payload
 
 
 FIELD_LABELS = {
@@ -80,6 +81,17 @@ class FakeResponse:
         return {"message": {"content": self.content}}
 
 
+class FakeOllamaStatus:
+    def __init__(self, service_available, message=""):
+        self.service_available = service_available
+        self.message = message
+
+
+class FakeDb:
+    def get_assessment_years(self):
+        return []
+
+
 class AIChatDirectModelTests(unittest.TestCase):
     def test_chat_dialog_no_longer_uses_structured_pipeline(self):
         source = "\n".join(
@@ -87,6 +99,7 @@ class AIChatDirectModelTests(unittest.TestCase):
                 inspect.getsource(AIChatDialog),
                 inspect.getsource(AIWorker),
                 inspect.getsource(AIChatDialog.start_inference),
+                inspect.getsource(AIChatDialog.refresh_models),
             ]
         )
 
@@ -95,6 +108,9 @@ class AIChatDirectModelTests(unittest.TestCase):
         self.assertIn("recommend_context_length", source)
         self.assertIn("ctx_label", source)
         self.assertNotIn("ctx_combo", source)
+        self.assertNotIn("startup_progress", source)
+        self.assertNotIn("OllamaStartupWorker", source)
+        self.assertNotIn("ensure_ollama_ready(start_if_needed=True)", source)
         self.assertNotIn("AIQueryEngine", source)
         self.assertNotIn("AIConversationState", source)
         self.assertNotIn("session_state", source)
@@ -192,6 +208,84 @@ class AIChatDirectModelTests(unittest.TestCase):
         AIChatDialog.update_context_label(dialog, 4096)
 
         self.assertEqual("4096（15.6GB 内存 / 4GB 显存）", dialog.ctx_label.text)
+
+    def make_query_tab_stub(self):
+        tab = QueryTab.__new__(QueryTab)
+        tab.db = FakeDb()
+        tab.current_results_dict = {"base_info": [{"sequence": 1, "name": "张三"}]}
+        tab.permissions = {"base_info": True, "rewards": False, "family": False, "resume": False}
+        tab.ai_dialog = None
+        return tab
+
+    def test_open_ai_chat_opens_dialog_without_progress_when_ollama_ready(self):
+        tab = self.make_query_tab_stub()
+
+        with patch.object(QueryTab, "open_ai_dialog") as open_dialog, \
+                patch.object(QueryTab, "start_ollama_then_open_ai") as start_then_open, \
+                patch("ui.query.ensure_ollama_ready", return_value=FakeOllamaStatus(True)) as ensure_ready:
+            QueryTab.open_ai_chat(tab)
+
+        ensure_ready.assert_called_once_with(start_if_needed=False)
+        open_dialog.assert_called_once()
+        start_then_open.assert_not_called()
+
+    def test_open_ai_chat_uses_progress_task_when_ollama_not_ready(self):
+        tab = self.make_query_tab_stub()
+
+        with patch.object(QueryTab, "open_ai_dialog") as open_dialog, \
+                patch.object(QueryTab, "start_ollama_then_open_ai") as start_then_open, \
+                patch("ui.query.ensure_ollama_ready", return_value=FakeOllamaStatus(False)):
+            QueryTab.open_ai_chat(tab)
+
+        open_dialog.assert_not_called()
+        start_then_open.assert_called_once()
+
+    def test_start_ollama_then_open_ai_uses_main_window_progress(self):
+        tab = self.make_query_tab_stub()
+        calls = {}
+
+        class FakeMainWindow:
+            def run_background_task(
+                self,
+                title,
+                task_fn,
+                on_success=None,
+                on_error=None,
+                progress_dialog_factory=None,
+            ):
+                calls["title"] = title
+                calls["progress_dialog_factory"] = progress_dialog_factory
+                calls["result"] = task_fn()
+                on_success(calls["result"])
+
+        tab.window = lambda: FakeMainWindow()
+
+        with patch.object(QueryTab, "open_ai_dialog") as open_dialog, \
+                patch("ui.query.ensure_ollama_ready", return_value=FakeOllamaStatus(True)) as ensure_ready:
+            QueryTab.start_ollama_then_open_ai(tab, payload())
+
+        self.assertEqual("正在启动 Ollama，请稍候...", calls["title"])
+        self.assertTrue(callable(calls["progress_dialog_factory"]))
+        self.assertIn("ModernLoadingDialog", inspect.getsource(calls["progress_dialog_factory"]))
+        ensure_ready.assert_called_once_with(start_if_needed=True)
+        open_dialog.assert_called_once()
+
+    def test_main_window_background_task_keeps_default_progress_dialog_path(self):
+        source = inspect.getsource(MainWindow.run_background_task)
+
+        self.assertIn("progress_dialog_factory=None", source)
+        self.assertIn("QProgressDialog", source)
+        self.assertIn("progress_dialog_factory(self, title)", source)
+
+    def test_handle_ollama_started_for_ai_warns_when_start_failed(self):
+        tab = self.make_query_tab_stub()
+
+        with patch.object(QueryTab, "open_ai_dialog") as open_dialog, \
+                patch("ui.query.QMessageBox.warning") as warning:
+            QueryTab.handle_ollama_started_for_ai(tab, FakeOllamaStatus(False, "启动失败"), payload())
+
+        open_dialog.assert_not_called()
+        warning.assert_called_once()
 
     def test_build_ai_analysis_payload_keeps_permitted_schema_with_empty_rows(self):
         results = {
