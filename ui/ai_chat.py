@@ -27,12 +27,13 @@ class AIWorker(QObject):
 
     finished = pyqtSignal(object)
 
-    def __init__(self, question, analysis_payload, model_name, n_ctx):
+    def __init__(self, question, analysis_payload, model_name, n_ctx, history_messages=None):
         super().__init__()
         self.question = question
         self.analysis_payload = analysis_payload
         self.model_name = model_name
         self.n_ctx = n_ctx
+        self.history_messages = [dict(message) for message in history_messages or []]
         self._is_running = True
 
     def stop(self):
@@ -46,6 +47,7 @@ class AIWorker(QObject):
                 self.analysis_payload,
                 self.model_name,
                 self.n_ctx,
+                history_messages=self.history_messages,
             )
             if self._is_running:
                 self.finished.emit(answer or "模型没有返回内容。")
@@ -180,6 +182,7 @@ class AIChatDialog(QDialog):
         self.input_field.clear()
         self.send_btn.setEnabled(False)
         self.status_label.setText("AI 正在调用模型...")
+        history_snapshot = [dict(message) for message in self.history_messages]
         self.history_messages.append({"role": "user", "content": question})
 
         self.worker = AIWorker(
@@ -187,6 +190,7 @@ class AIChatDialog(QDialog):
             self.analysis_payload,
             model_name,
             n_ctx,
+            history_snapshot,
         )
         self.worker_thread = threading.Thread(target=self.worker.run)
         self.worker_thread.daemon = True
