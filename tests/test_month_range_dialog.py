@@ -4,6 +4,7 @@ import unittest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt5.QtWidgets import QApplication, QFrame
+from PyQt5.QtCore import Qt
 
 from ui.query import MonthRangeDialog, MonthRangePicker
 
@@ -26,13 +27,24 @@ class MonthRangeDialogTests(unittest.TestCase):
         self.assertEqual("确认", dialog.ok_button.text())
         self.assertEqual("取消", dialog.cancel_button.text())
 
-    def test_month_panels_have_bottom_dividers(self):
+    def test_month_panels_use_card_containers(self):
         dialog = self.make_dialog()
 
+        self.assertIn("QFrame#monthPanel", dialog.styleSheet())
         for panel in (dialog.start_panel, dialog.end_panel):
+            self.assertIsInstance(panel, QFrame)
+            self.assertEqual("monthPanel", panel.objectName())
+            self.assertTrue(panel.testAttribute(Qt.WA_StyledBackground))
+            self.assertIsNotNone(panel.graphicsEffect())
             divider = panel.findChild(QFrame, "monthPanelDivider")
-            self.assertIsNotNone(divider)
-            self.assertEqual(1, divider.height())
+            self.assertIsNone(divider)
+            margins = panel.layout().contentsMargins()
+            self.assertEqual((16, 16, 16, 16), (
+                margins.left(),
+                margins.top(),
+                margins.right(),
+                margins.bottom(),
+            ))
 
     def test_year_navigation_stays_within_month_grid_width(self):
         dialog = self.make_dialog()

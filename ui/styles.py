@@ -399,16 +399,10 @@ QComboBox::drop-down {
     border: none;
     width: 24px;
 }
-QWidget#monthPanel {
+QFrame#monthPanel {
     background-color: #ffffff;
     border: 1px solid #E5EAF0;
     border-radius: 8px;
-}
-QFrame#monthPanelDivider {
-    background-color: #E5EAF0;
-    border: none;
-    min-height: 1px;
-    max-height: 1px;
 }
 QLabel#monthPanelCaption {
     color: #57606a;
@@ -454,7 +448,7 @@ QPushButton#monthCell {
     min-height: 36px;
     max-height: 36px;
     padding: 0;
-    font-size: 13px;
+    font-size: 18px;
     border: 1px solid #d0d7de;
     border-radius: 5px;
     background-color: #ffffff;
@@ -484,7 +478,7 @@ QPushButton#yearCell {
     min-height: 36px;
     max-height: 36px;
     padding: 0;
-    font-size: 13px;
+    font-size: 18px;
     border: 1px solid #d0d7de;
     border-radius: 5px;
     background-color: #ffffff;

@@ -209,7 +209,7 @@ class MonthRangeDialog(QDialog):
         return int(value.split(".")[0]) if value else None
 
 
-class MonthPanel(QWidget):
+class MonthPanel(QFrame):
     """单侧年份月份面板。"""
 
     YEAR_PAGE_SIZE = 12
@@ -240,6 +240,12 @@ class MonthPanel(QWidget):
 
     def setup_ui(self):
         self.setObjectName("monthPanel")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(14)
+        shadow.setOffset(0, 2)
+        shadow.setColor(QColor(0, 0, 0, 24))
+        self.setGraphicsEffect(shadow)
         self.content_width = (
             self.MONTH_GRID_COLUMNS * self.MONTH_CELL_WIDTH
             + (self.MONTH_GRID_COLUMNS - 1) * self.MONTH_GRID_SPACING
@@ -250,7 +256,7 @@ class MonthPanel(QWidget):
         )
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 0)
+        layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
 
         caption = QLabel(self.title)
@@ -323,10 +329,6 @@ class MonthPanel(QWidget):
         layout.addWidget(self.grid_stack, 0, Qt.AlignHCenter)
 
         layout.addStretch()
-        self.divider = QFrame()
-        self.divider.setObjectName("monthPanelDivider")
-        self.divider.setFixedHeight(1)
-        layout.addWidget(self.divider)
 
     def apply_cell_metrics(self):
         self.header_widget.setFixedWidth(self.content_width)
