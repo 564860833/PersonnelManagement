@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import sqlite3
+from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
 from metadata.constants import COLUMN_LABEL_TO_FIELD, DEFAULT_PERMISSIONS, TABLE_NAMES, validate_table_name
@@ -98,6 +99,7 @@ class Database:
             path = db_path if db_path else config.DB_PATH
             self.conn = sqlite3.connect(path)
             self.conn.row_factory = sqlite3.Row
+            self._register_sqlite_functions()
             self.conn.execute("PRAGMA foreign_keys = ON")
             logger.info(f"成功连接到数据库: {path}")
         except sqlite3.Error as e:
@@ -108,8 +110,37 @@ class Database:
             default_path = "personnel_system.db"
             self.conn = sqlite3.connect(default_path)
             self.conn.row_factory = sqlite3.Row
+            self._register_sqlite_functions()
             self.conn.execute("PRAGMA foreign_keys = ON")
             logger.info(f"使用默认路径连接数据库: {default_path}")
+
+    def _register_sqlite_functions(self):
+        self.conn.create_function("personnel_month_key", 1, self._month_key)
+
+    @staticmethod
+    def _month_key(value) -> Optional[str]:
+        if value is None:
+            return None
+
+        if isinstance(value, datetime):
+            return f"{value.year:04d}.{value.month:02d}"
+        if isinstance(value, date):
+            return f"{value.year:04d}.{value.month:02d}"
+
+        text = str(value).strip()
+        if not text or text.lower() in {"nan", "nat", "none"}:
+            return None
+
+        normalized = text.replace("/", ".").replace("-", ".")
+        match = re.match(r"^(\d{4})\.(\d{1,2})(?:\D|$)", normalized)
+        if not match:
+            return None
+
+        year = int(match.group(1))
+        month = int(match.group(2))
+        if month < 1 or month > 12:
+            return None
+        return f"{year:04d}.{month:02d}"
 
     def create_tables(self):
         """Create or migrate core data tables."""
@@ -383,6 +414,10 @@ class Database:
                 if normalized_col in valid_columns:
                     if normalized_col == "sequence":
                         value = self._sequence_value_for_storage(value)
+                    elif table_name == "base_info" and normalized_col == "birth_date":
+                        month_key = self._month_key(value)
+                        if month_key:
+                            value = month_key
                     normalized_row[normalized_col] = value
             if normalized_row:
                 normalized_data.append(normalized_row)
@@ -636,16 +671,18 @@ class Database:
                     params.append(pos)
                 base_conditions.append(f"({' OR '.join(position_conditions)})")
 
-            if birth_start and birth_end:
-                base_conditions.append("(REPLACE(birth_date, '-', '.') BETWEEN ? AND ?)")
-                params.append(birth_start)
-                params.append(birth_end)
-            elif birth_start:
-                base_conditions.append("REPLACE(birth_date, '-', '.') >= ?")
-                params.append(birth_start)
-            elif birth_end:
-                base_conditions.append("REPLACE(birth_date, '-', '.') <= ?")
-                params.append(birth_end)
+            birth_start_key = self._month_key(birth_start)
+            birth_end_key = self._month_key(birth_end)
+            if birth_start_key and birth_end_key:
+                base_conditions.append("(personnel_month_key(birth_date) BETWEEN ? AND ?)")
+                params.append(birth_start_key)
+                params.append(birth_end_key)
+            elif birth_start_key:
+                base_conditions.append("personnel_month_key(birth_date) >= ?")
+                params.append(birth_start_key)
+            elif birth_end_key:
+                base_conditions.append("personnel_month_key(birth_date) <= ?")
+                params.append(birth_end_key)
 
             if education:
                 edu_conditions = []

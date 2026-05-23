@@ -53,6 +53,45 @@ class DatabasePersonIdTests(unittest.TestCase):
         self.assertEqual("张三", reward["name"])
         self.assertEqual("优秀", reward["reward_name"])
 
+    def test_birth_month_search_matches_legacy_datetime_text(self):
+        db = self.open_db()
+        db.conn.execute(
+            "INSERT INTO base_info(sequence, name, birth_date) VALUES (?, ?, ?)",
+            (1, "A", "1990-01-01 00:00:00"),
+        )
+        db.conn.execute(
+            "INSERT INTO base_info(sequence, name, birth_date) VALUES (?, ?, ?)",
+            (2, "B", "1990-02-01 00:00:00"),
+        )
+        db.conn.commit()
+
+        results = db.search_personnel(birth_start="1990.01", birth_end="1990.01")
+
+        self.assertEqual(["A"], [row["name"] for row in results["base_info"]])
+
+    def test_birth_month_search_keeps_existing_month_format(self):
+        db = self.open_db()
+        db.import_excel_data(
+            "base_info",
+            [
+                {"sequence": 1, "name": "A", "birth_date": "1990.01"},
+                {"sequence": 2, "name": "B", "birth_date": "1990.02"},
+            ],
+        )
+
+        results = db.search_personnel(birth_start="1990.01", birth_end="1990.01")
+
+        self.assertEqual(["A"], [row["name"] for row in results["base_info"]])
+
+    def test_base_info_import_normalizes_birth_date_month(self):
+        db = self.open_db()
+        db.import_excel_data(
+            "base_info",
+            [{"sequence": 1, "name": "A", "birth_date": "1990-01-01 00:00:00"}],
+        )
+
+        self.assertEqual("1990.01", db.get_all_data("base_info")[0]["birth_date"])
+
     def test_related_import_rejects_missing_base_person(self):
         db = self.open_db()
 
