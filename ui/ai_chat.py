@@ -30,7 +30,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from services.ai_context import next_context_length, recommend_context_length
+from services.ai_context import recommend_context_length
 from services.ai_direct import ask_model, is_context_length_error
 from services.ollama_manager import APP_OLLAMA_HOST, fetch_ollama_models
 from ui.styles import DIALOG_BASE_STYLE, DIALOG_BUTTON_STYLE
@@ -154,12 +154,15 @@ OTHER_FIELD_GROUP_LABEL = "其他字段"
 
 AI_CORE_FIELDS_CONFIG_FILE = Path("ai_core_fields.json")
 MODEL_PLACEHOLDER = "未检测到可用模型"
-NAV_SIDEBAR_WIDTH = 300
+NAV_SIDEBAR_WIDTH = 360
+NAV_SIDEBAR_MIN_WIDTH = 360
+TABLE_NAV_BUTTON_MIN_WIDTH = 284
 CONTEXT_PRESSURE_REFRESH_DELAY_MS = 200
 CONTEXT_BUFFER_RATIO = 0.25
 CJK_TOKEN_WEIGHT = 1.8
 ASCII_TOKEN_WEIGHT = 0.3
 WHITESPACE_TOKEN_WEIGHT = 0.05
+MANUAL_CONTEXT_OPTIONS = (2048, 4096, 8192, 16384, 32768)
 
 AI_CHAT_STYLE = """
 QSplitter::handle {
@@ -173,7 +176,8 @@ QFrame#aiHeaderPanel,
 QFrame#aiColumnPanel,
 QFrame#aiInputPanel,
 QFrame#aiSidebarSection,
-QFrame#aiFieldPageHeader {
+QFrame#aiFieldPageHeader,
+QFrame#aiFieldPageFooter {
     background-color: #FFFFFF;
     border: 1px solid #E5EAF0;
     border-radius: 8px;
@@ -217,6 +221,9 @@ QLabel#aiContextLabel,
 QLabel#aiColumnSummary,
 QLabel#aiFooterStatus {
     color: #57606A;
+}
+QComboBox#aiContextCombo {
+    min-width: 96px;
 }
 QLabel#aiTableTitle {
     color: #174A8B;
@@ -334,7 +341,8 @@ QFrame#aiCoreButtonGroup {
     border: none;
 }
 QPushButton#aiCoreSegmentLeft {
-    min-height: 32px;
+    min-height: 34px;
+    max-height: 34px;
     padding: 4px 14px;
     border: 1px solid #C9D1D9;
     border-top-left-radius: 5px;
@@ -355,7 +363,8 @@ QPushButton#aiCoreSegmentLeft:disabled {
     color: #8C959F;
 }
 QToolButton#aiCoreSegmentRight {
-    min-height: 32px;
+    min-height: 34px;
+    max-height: 34px;
     padding: 4px 12px;
     border: 1px solid #C9D1D9;
     border-left: none;
@@ -488,7 +497,6 @@ class AIWorker(QObject):
 
     finished = pyqtSignal(object)
     failed = pyqtSignal(str)
-    context_changed = pyqtSignal(int)
 
     def __init__(
         self,
@@ -504,7 +512,6 @@ class AIWorker(QObject):
         self.analysis_payload = analysis_payload
         self.model_name = model_name
         self.n_ctx = n_ctx
-        self.max_n_ctx = max_n_ctx or n_ctx
         self.history_messages = [dict(message) for message in history_messages or []]
         self._is_running = True
 
@@ -514,34 +521,16 @@ class AIWorker(QObject):
     def run(self):
         try:
             logger.debug("正在调用 Ollama 模型，model=%s, ctx=%s", self.model_name, self.n_ctx)
-            answer = self._ask_with_context_retry()
+            answer = self._ask_with_context(self.n_ctx)
             if self._is_running:
                 self.finished.emit(answer or "模型没有返回内容。")
         except Exception as e:
             if self._is_running:
                 logger.exception("AI 模型调用出错")
-                self.failed.emit(str(e))
-
-    def _ask_with_context_retry(self):
-        while True:
-            try:
-                return self._ask_with_context(self.n_ctx)
-            except Exception as e:
-                if not is_context_length_error(e):
-                    raise
-
-                retry_n_ctx = next_context_length(self.n_ctx, self.max_n_ctx)
-                if not retry_n_ctx:
-                    raise
-
-                logger.info(
-                    "AI 上下文不足，准备自动升档重试: model=%s, ctx=%s -> %s",
-                    self.model_name,
-                    self.n_ctx,
-                    retry_n_ctx,
-                )
-                self.n_ctx = retry_n_ctx
-                self.context_changed.emit(retry_n_ctx)
+                if is_context_length_error(e):
+                    self.failed.emit("上下文不足，请在左下角选择更大的上下文后重试")
+                else:
+                    self.failed.emit(str(e))
 
     def _ask_with_context(self, n_ctx):
         return ask_model(
@@ -1362,41 +1351,29 @@ class FieldSelectionPage(QFrame):
 
         header = QFrame()
         header.setObjectName("aiFieldPageHeader")
-        header_layout = QVBoxLayout(header)
-        header_layout.setContentsMargins(16, 14, 16, 14)
-        header_layout.setSpacing(10)
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(16, 12, 16, 12)
+        header_layout.setSpacing(8)
+        self.field_header_layout = header_layout
 
-        title_row = QHBoxLayout()
-        title_row.setSpacing(10)
-        title_box = QVBoxLayout()
-        title_box.setContentsMargins(0, 0, 0, 0)
-        title_box.setSpacing(3)
-        self.title_label = QLabel(table_label)
+        self.title_label = QLabel(f"{table_label}（{self.row_count}行）")
         self.title_label.setObjectName("aiFieldPageTitle")
-        self.meta_label = QLabel(f"{self.row_count} 行数据")
-        self.meta_label.setObjectName("aiFieldPageMeta")
-        title_box.addWidget(self.title_label)
-        title_box.addWidget(self.meta_label)
-        title_row.addLayout(title_box, 1)
+        self.title_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        header_layout.addWidget(self.title_label, 1, Qt.AlignVCenter)
 
         self.badge_label = QLabel("已选 0/0 列")
         self.badge_label.setObjectName("aiFieldPageBadge")
-        title_row.addWidget(self.badge_label, 0, Qt.AlignTop)
+        header_layout.addWidget(self.badge_label, 0, Qt.AlignVCenter)
 
-        self.return_btn = QPushButton("完成选择并返回对话")
-        self.return_btn.setObjectName("primaryButton")
-        self.return_btn.clicked.connect(lambda _checked=False: self.return_requested.emit())
-        title_row.addWidget(self.return_btn, 0, Qt.AlignTop)
-        header_layout.addLayout(title_row)
-
-        action_row = QHBoxLayout()
-        action_row.setSpacing(8)
         self.core_btn = QPushButton("核心字段")
         self.core_btn.setObjectName("aiCoreSegmentLeft")
+        self.core_btn.setFixedHeight(34)
         self.core_config_btn = QToolButton()
         self.core_config_btn.setObjectName("aiCoreSegmentRight")
         self.core_config_btn.setText("🔍")
         self.core_config_btn.setToolTip("配置本表核心字段")
+        self.core_config_btn.setAutoRaise(False)
+        self.core_config_btn.setFixedHeight(34)
         self.core_button_group = QFrame()
         self.core_button_group.setObjectName("aiCoreButtonGroup")
         self.core_button_group_layout = QHBoxLayout(self.core_button_group)
@@ -1414,11 +1391,9 @@ class FieldSelectionPage(QFrame):
             "all": self.all_btn,
             "reset": self.reset_btn,
         }
-        action_row.addWidget(self.core_button_group)
-        action_row.addWidget(self.all_btn)
-        action_row.addWidget(self.reset_btn)
-        action_row.addStretch()
-        header_layout.addLayout(action_row)
+        header_layout.addWidget(self.core_button_group, 0, Qt.AlignVCenter)
+        header_layout.addWidget(self.all_btn, 0, Qt.AlignVCenter)
+        header_layout.addWidget(self.reset_btn, 0, Qt.AlignVCenter)
         layout.addWidget(header)
 
         field_scroll = QScrollArea()
@@ -1453,6 +1428,19 @@ class FieldSelectionPage(QFrame):
 
         field_scroll.setWidget(groups_wrap)
         layout.addWidget(field_scroll, 1)
+
+        footer = QFrame()
+        footer.setObjectName("aiFieldPageFooter")
+        footer_layout = QHBoxLayout(footer)
+        footer_layout.setContentsMargins(0, 0, 0, 0)
+        footer_layout.setSpacing(8)
+        self.field_footer_layout = footer_layout
+        footer_layout.addStretch()
+        self.return_btn = QPushButton("完成选择并返回对话")
+        self.return_btn.setObjectName("primaryButton")
+        self.return_btn.clicked.connect(lambda _checked=False: self.return_requested.emit())
+        footer_layout.addWidget(self.return_btn, 0, Qt.AlignRight | Qt.AlignBottom)
+        layout.addWidget(footer)
 
         self.core_btn.clicked.connect(self.set_core_fields)
         self.core_config_btn.clicked.connect(lambda _checked=False: self.open_core_field_dialog())
@@ -1645,9 +1633,12 @@ class TableNavItem(QFrame):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
+        self.setMinimumWidth(TABLE_NAV_BUTTON_MIN_WIDTH + 50)
         self.nav_button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.nav_button.setMinimumWidth(TABLE_NAV_BUTTON_MIN_WIDTH)
         self.enable_switch = TableEnableSwitch(self)
         self.enable_switch.setChecked(True)
+        self.enable_switch.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.enable_switch.toggled.connect(self._emit_toggled)
 
         layout.addWidget(self.nav_button, 1)
@@ -1680,6 +1671,7 @@ class AIChatDialog(QDialog):
         self.worker = None
         self.worker_thread = None
         self.current_context_n_ctx = None
+        self.context_options = []
         self.column_checks = {}
         self.table_pages = {}
         self.table_nav_buttons = {}
@@ -1730,29 +1722,73 @@ class AIChatDialog(QDialog):
         elif not self.is_valid_model_name(model_name):
             model_name = ""
 
+        previous_n_ctx = _safe_instance_value(self, "current_context_n_ctx")
         self.current_context_recommendation = recommend_context_length(model_name)
-        self.current_context_n_ctx = self.current_context_recommendation.n_ctx
-        self.update_context_label(self.current_context_recommendation.n_ctx)
+        self.context_options = self.available_context_options(self.current_context_recommendation)
+        if previous_n_ctx in self.context_options:
+            selected_n_ctx = previous_n_ctx
+        elif previous_n_ctx is None:
+            selected_n_ctx = self.current_context_recommendation.n_ctx
+        else:
+            selected_n_ctx = max(self.context_options or [self.current_context_recommendation.n_ctx])
+        self.set_context_n_ctx(selected_n_ctx)
         if _safe_instance_value(self, "pressure_timer") is not None:
             self.schedule_context_pressure_refresh()
         return self.current_context_recommendation
 
-    def update_context_label(self, n_ctx):
+    def available_context_options(self, recommendation=None):
+        recommendation = recommendation or self.current_context_recommendation
+        if recommendation is None:
+            return list(MANUAL_CONTEXT_OPTIONS)
+        max_n_ctx = max(1, int(getattr(recommendation, "max_n_ctx", None) or recommendation.n_ctx or 4096))
+        recommended_n_ctx = max(1, int(getattr(recommendation, "n_ctx", 4096) or 4096))
+        options = [value for value in MANUAL_CONTEXT_OPTIONS if value <= max_n_ctx]
+        if recommended_n_ctx <= max_n_ctx:
+            options.append(recommended_n_ctx)
+        if not options:
+            options.append(recommended_n_ctx)
+        return sorted(set(options))
+
+    def set_context_n_ctx(self, n_ctx):
         self.current_context_n_ctx = int(n_ctx) if n_ctx else self.current_context_n_ctx
-        if self.current_context_recommendation:
-            self.ctx_label.setText(f"{int(n_ctx)}（{self.current_context_recommendation.reason}）")
-        else:
-            self.ctx_label.setText(str(n_ctx))
-
-        try:
-            is_running = self.is_inference_running
-        except (AttributeError, RuntimeError):
-            is_running = False
-
-        if is_running:
-            self.status_label.setText(f"上下文已自动升档到 {int(n_ctx)}，正在重试分析...")
+        self.refresh_context_controls()
         if _safe_instance_value(self, "pressure_timer") is not None:
             self.schedule_context_pressure_refresh()
+
+    def refresh_context_controls(self):
+        context_combo = _safe_instance_value(self, "context_combo")
+        context_reason_label = _safe_instance_value(self, "context_reason_label")
+        if context_combo is not None:
+            selected_text = str(int(self.current_context_n_ctx or 0))
+            blocked = context_combo.blockSignals(True) if hasattr(context_combo, "blockSignals") else None
+            try:
+                if hasattr(context_combo, "clear"):
+                    context_combo.clear()
+                for option in self.context_options or self.available_context_options():
+                    context_combo.addItem(str(int(option)))
+                if hasattr(context_combo, "findText") and hasattr(context_combo, "setCurrentIndex"):
+                    index = context_combo.findText(selected_text)
+                    if index >= 0:
+                        context_combo.setCurrentIndex(index)
+                elif hasattr(context_combo, "setCurrentText"):
+                    context_combo.setCurrentText(selected_text)
+            finally:
+                if hasattr(context_combo, "blockSignals"):
+                    context_combo.blockSignals(blocked)
+        if context_reason_label is not None:
+            if self.current_context_recommendation:
+                context_reason_label.setText(f"（{self.current_context_recommendation.reason}）")
+            else:
+                context_reason_label.setText("")
+
+    def on_context_combo_changed(self, value):
+        try:
+            n_ctx = int(str(value).strip())
+        except (TypeError, ValueError):
+            return
+        if n_ctx == int(self.current_context_n_ctx or 0):
+            return
+        self.set_context_n_ctx(n_ctx)
 
     def schedule_context_pressure_refresh(self):
         pressure_timer = _safe_instance_value(self, "pressure_timer")
@@ -1827,8 +1863,9 @@ class AIChatDialog(QDialog):
 
         sidebar_panel = QFrame()
         sidebar_panel.setObjectName("aiSidebarPanel")
-        sidebar_panel.setMinimumWidth(260)
+        sidebar_panel.setMinimumWidth(NAV_SIDEBAR_MIN_WIDTH)
         sidebar_panel.setMaximumWidth(360)
+        self.sidebar_panel = sidebar_panel
         sidebar_layout = QVBoxLayout(sidebar_panel)
         sidebar_layout.setContentsMargins(12, 12, 12, 12)
         sidebar_layout.setSpacing(12)
@@ -1840,8 +1877,10 @@ class AIChatDialog(QDialog):
         sidebar_header_layout.setSpacing(3)
         self.sidebar_title_label = QLabel("智能分析")
         self.sidebar_title_label.setObjectName("aiSidebarTitle")
+        self.sidebar_title_label.setWordWrap(False)
         self.sidebar_subtitle_label = QLabel("当前对话与数据表")
         self.sidebar_subtitle_label.setObjectName("aiSidebarSubtitle")
+        self.sidebar_subtitle_label.setWordWrap(False)
         sidebar_header_layout.addWidget(self.sidebar_title_label)
         sidebar_header_layout.addWidget(self.sidebar_subtitle_label)
         sidebar_layout.addWidget(sidebar_header)
@@ -1858,8 +1897,12 @@ class AIChatDialog(QDialog):
         table_header.setSpacing(8)
         table_title = QLabel("数据表")
         table_title.setObjectName("aiSectionTitle")
+        table_title.setWordWrap(False)
+        self.table_title_label = table_title
         self.column_summary_label = QLabel()
         self.column_summary_label.setObjectName("aiColumnSummary")
+        self.column_summary_label.setWordWrap(False)
+        self.column_summary_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         table_header.addWidget(table_title)
         table_header.addStretch()
         table_header.addWidget(self.column_summary_label)
@@ -1911,6 +1954,8 @@ class AIChatDialog(QDialog):
         button.setObjectName("aiNavButton")
         button.setCheckable(True)
         button.setMinimumHeight(50)
+        button.setMinimumWidth(TABLE_NAV_BUTTON_MIN_WIDTH)
+        button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         button.setCursor(Qt.PointingHandCursor)
         return button
 
@@ -1930,11 +1975,12 @@ class AIChatDialog(QDialog):
 
         settings_header = QHBoxLayout()
         settings_header.setSpacing(8)
-        settings_header.addStretch()
+        self.settings_header_layout = settings_header
         self.model_status_label = QLabel("正在初始化")
         self.model_status_label.setObjectName("aiModelStatus")
         self.model_status_label.setProperty("state", "busy")
         settings_header.addWidget(self.model_status_label)
+        settings_header.addStretch()
         settings_layout.addLayout(settings_header)
 
         self.model_combo = QComboBox()
@@ -1959,10 +2005,17 @@ class AIChatDialog(QDialog):
         pressure_label.setObjectName("aiSectionTitle")
         pressure_row.addWidget(pressure_label)
         pressure_row.addStretch()
-        self.ctx_label = QLabel("自动检测中...")
-        self.ctx_label.setObjectName("aiContextLabel")
-        pressure_row.addWidget(self.ctx_label)
+        self.context_combo = QComboBox()
+        self.context_combo.setObjectName("aiContextCombo")
+        self.context_combo.setToolTip("选择上下文大小")
+        self.context_combo.currentTextChanged.connect(self.on_context_combo_changed)
+        pressure_row.addWidget(self.context_combo, 0, Qt.AlignVCenter)
         settings_layout.addLayout(pressure_row)
+
+        self.context_reason_label = QLabel("")
+        self.context_reason_label.setObjectName("aiContextLabel")
+        self.context_reason_label.setWordWrap(True)
+        settings_layout.addWidget(self.context_reason_label)
 
         self.pressure_bar = QProgressBar()
         self.pressure_bar.setObjectName("aiContextPressureBar")
@@ -2214,8 +2267,8 @@ class AIChatDialog(QDialog):
         column_summary_label = _safe_instance_value(self, "column_summary_label")
         if column_summary_label is None:
             return
-        table_count, column_count, row_count = self.selected_payload_stats()
-        column_summary_label.setText(f"将发送 {table_count} 个表 / {column_count} 列 / {row_count} 行")
+        table_count, column_count, _row_count = self.selected_payload_stats()
+        column_summary_label.setText(f"将发送{table_count}个表/{column_count}列")
         self.refresh_table_navigation()
         if _safe_instance_value(self, "send_btn") is not None:
             self.update_action_state()
@@ -2248,8 +2301,9 @@ class AIChatDialog(QDialog):
 
         selected_payload = self.selected_analysis_payload()
 
-        recommendation = self.current_context_recommendation or self.refresh_context_recommendation(model_name)
-        n_ctx = recommendation.n_ctx
+        if self.current_context_recommendation is None:
+            self.refresh_context_recommendation(model_name)
+        n_ctx = int(self.current_context_n_ctx or 4096)
 
         self.append_message("user", question)
         self.input_field.clear()
@@ -2267,11 +2321,9 @@ class AIChatDialog(QDialog):
             model_name,
             n_ctx,
             history_snapshot,
-            recommendation.max_n_ctx,
         )
         self.worker_thread = threading.Thread(target=self.worker.run)
         self.worker_thread.daemon = True
-        self.worker.context_changed.connect(self.update_context_label)
         self.worker.finished.connect(self.handle_response)
         self.worker.failed.connect(self.handle_error)
         self.worker_thread.start()

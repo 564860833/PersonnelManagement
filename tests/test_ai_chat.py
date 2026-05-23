@@ -9,7 +9,7 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt5.QtCore import QPoint
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWidgets import QApplication, QComboBox
 
 from services.ai_context import ContextRecommendation, HardwareSnapshot
 from services.ai_direct import ask_model, build_messages
@@ -21,6 +21,8 @@ from ui.ai_chat import (
     CoreFieldSelectionDialog,
     FieldSelectionPage,
     MODEL_PLACEHOLDER,
+    NAV_SIDEBAR_MIN_WIDTH,
+    TABLE_NAV_BUTTON_MIN_WIDTH,
     TableNavItem,
     TableEnableSwitch,
     core_fields_for_table,
@@ -154,12 +156,46 @@ class FakeLineEdit(FakeWidget):
 
 
 class FakeCombo(FakeWidget):
-    def __init__(self, text):
+    def __init__(self, text=""):
         super().__init__()
         self._text = text
+        self.items = []
+        self.signals_blocked = False
 
     def currentText(self):
         return self._text
+
+    def clear(self):
+        self.items = []
+        self._text = ""
+
+    def addItem(self, text):
+        self.items.append(str(text))
+        if not self._text:
+            self._text = str(text)
+
+    def findText(self, text):
+        try:
+            return self.items.index(str(text))
+        except ValueError:
+            return -1
+
+    def setCurrentIndex(self, index):
+        self._text = self.items[index]
+
+    def setCurrentText(self, text):
+        self._text = str(text)
+
+    def blockSignals(self, blocked):
+        previous = self.signals_blocked
+        self.signals_blocked = blocked
+        return previous
+
+    def count(self):
+        return len(self.items)
+
+    def itemText(self, index):
+        return self.items[index]
 
 
 class FakeLabel:
@@ -237,6 +273,8 @@ class TestAIChatDialogBehavior(unittest.TestCase):
             hardware=HardwareSnapshot(),
             max_n_ctx=4096,
         )
+        dialog.current_context_n_ctx = 4096
+        dialog.context_options = [2048, 4096]
         dialog.is_inference_running = False
         dialog.worker = None
         dialog.worker_thread = None
@@ -273,6 +311,8 @@ class TestAIChatDialogBehavior(unittest.TestCase):
         )()
         dialog.pressure_value_label = FakeLabel()
         dialog.pressure_hint_label = FakeLabel()
+        dialog.context_combo = FakeCombo()
+        dialog.context_reason_label = FakeLabel()
         dialog.column_summary_label = FakeLabel()
         dialog.status_label = FakeLabel()
         dialog.model_status_label = FakeLabel()
@@ -417,6 +457,21 @@ class TestAIChatDialogBehavior(unittest.TestCase):
         self.assertIs(page.core_button_group_layout.itemAt(0).widget(), page.core_btn)
         self.assertIs(page.core_button_group_layout.itemAt(1).widget(), page.core_config_btn)
         self.assertEqual("🔍", page.core_config_btn.text())
+        self.assertEqual(page.core_btn.height(), page.core_config_btn.height())
+        self.assertEqual(34, page.core_btn.maximumHeight())
+        self.assertEqual(34, page.core_config_btn.maximumHeight())
+        self.assertEqual("人员基本信息（2行）", page.title_label.text())
+        self.assertEqual(page.field_header_layout.count(), 5)
+        self.assertEqual(0, page.field_header_layout.indexOf(page.title_label))
+        self.assertEqual(1, page.field_header_layout.indexOf(page.badge_label))
+        self.assertEqual(2, page.field_header_layout.indexOf(page.core_button_group))
+        self.assertEqual(3, page.field_header_layout.indexOf(page.all_btn))
+        self.assertEqual(4, page.field_header_layout.indexOf(page.reset_btn))
+        self.assertIsNotNone(page.return_btn)
+        self.assertEqual("完成选择并返回对话", page.return_btn.text())
+        self.assertEqual(2, page.field_footer_layout.count())
+        self.assertEqual(1, page.field_footer_layout.indexOf(page.return_btn))
+        self.assertFalse(hasattr(page, "meta_label"))
 
         page.set_all_fields(True)
         page.checkboxes["current_grade"].setChecked(False)
@@ -563,6 +618,11 @@ class TestAIChatDialogBehavior(unittest.TestCase):
             self.assertIsInstance(item, TableNavItem)
             self.assertIs(dialog.table_nav_buttons["base_info"], item.nav_button)
             self.assertTrue(item.enable_switch.isChecked())
+            self.assertGreaterEqual(dialog.sidebar_panel.minimumWidth(), NAV_SIDEBAR_MIN_WIDTH)
+            self.assertGreaterEqual(item.minimumWidth(), TABLE_NAV_BUTTON_MIN_WIDTH + item.enable_switch.width())
+            self.assertGreaterEqual(item.nav_button.minimumWidth(), TABLE_NAV_BUTTON_MIN_WIDTH)
+            self.assertTrue(item.enable_switch.sizePolicy().horizontalPolicy(), item.enable_switch.sizePolicy().Fixed)
+            self.assertFalse(dialog.column_summary_label.wordWrap())
 
             dialog.switch_to_chat()
             current_page = dialog.workspace_stack.currentWidget()
@@ -615,7 +675,7 @@ class TestAIChatDialogBehavior(unittest.TestCase):
 
         dialog.refresh_column_summary()
 
-        self.assertEqual("将发送 0 个表 / 0 列 / 0 行", dialog.column_summary_label.text)
+        self.assertEqual("将发送0个表/0列", dialog.column_summary_label.text)
         self.assertFalse(dialog.send_btn.enabled)
 
     def test_summary_and_action_state_do_not_build_full_payload(self):
@@ -627,7 +687,7 @@ class TestAIChatDialogBehavior(unittest.TestCase):
             dialog.refresh_column_summary()
             dialog.update_action_state()
 
-        self.assertEqual("将发送 2 个表 / 6 列 / 2 行", dialog.column_summary_label.text)
+        self.assertEqual("将发送2个表/6列", dialog.column_summary_label.text)
         self.assertTrue(dialog.send_btn.enabled)
 
     def test_selected_analysis_payload_uses_cache_until_selection_changes(self):
@@ -680,6 +740,34 @@ class TestAIChatDialogBehavior(unittest.TestCase):
         self.assertIn("background-color: #FBFDFF;", nav_style)
         self.assertNotIn("QPushButton#aiTableNavButton", AI_CHAT_STYLE)
 
+    def test_model_status_is_left_aligned_and_context_combo_has_options(self):
+        with patch("ui.ai_chat.fetch_ollama_models", return_value=(True, ["qwen2:latest"])):
+            dialog = AIChatDialog(payload())
+        try:
+            self.assertIs(dialog.settings_header_layout.itemAt(0).widget(), dialog.model_status_label)
+            self.assertIsInstance(dialog.context_combo, QComboBox)
+            self.assertIn(dialog.current_context_n_ctx, dialog.context_options)
+            self.assertEqual(str(dialog.current_context_n_ctx), dialog.context_combo.currentText())
+            self.assertNotIn("▾", dialog.context_combo.currentText())
+            self.assertGreater(dialog.context_combo.count(), 0)
+            self.assertTrue(dialog.context_reason_label.wordWrap())
+        finally:
+            dialog.close()
+
+    def test_selecting_context_updates_pressure_denominator(self):
+        dialog = self.make_dialog()
+        self.build_page(dialog)
+        dialog.context_combo = FakeCombo()
+        dialog.context_reason_label = FakeLabel()
+        dialog.context_options = [2048, 4096, 8192]
+
+        AIChatDialog.set_context_n_ctx(dialog, 8192)
+        dialog.refresh_context_pressure()
+
+        self.assertEqual(8192, dialog.current_context_n_ctx)
+        self.assertEqual("8192", dialog.context_combo.currentText())
+        self.assertIn("8.2k", dialog.pressure_value_label.text)
+
     def test_switching_to_field_page_reflows_tags_without_window_resize(self):
         with patch("ui.ai_chat.fetch_ollama_models", return_value=(True, ["qwen2:latest"])):
             dialog = AIChatDialog(payload())
@@ -704,7 +792,7 @@ class TestAIChatDialogBehavior(unittest.TestCase):
 
         dialog.refresh_column_summary()
 
-        self.assertIn("将发送 2 个表 / 6 列 / 2 行", dialog.column_summary_label.text)
+        self.assertIn("将发送2个表/6列", dialog.column_summary_label.text)
         self.assertIn("已选 4/4 列", page.badge_label.text())
         self.assertIn("已选 1/1", self.get_group(page, "其他字段").badge_label.text())
         self.assertIn("已选 4/4", dialog.table_nav_buttons["base_info"].text())
@@ -765,26 +853,22 @@ class AIChatDirectModelTests(unittest.TestCase):
         self.assertEqual(8192, args[3])
         self.assertEqual(history, kwargs["history_messages"])
 
-    def test_ai_worker_retries_context_errors_by_steps_until_device_limit(self):
+    def test_ai_worker_context_errors_fail_without_auto_retry(self):
         worker = AIWorker("继续分析", payload(), "qwen2:latest", 2048, max_n_ctx=32768)
-        changed_contexts = []
-        worker.context_changed.connect(changed_contexts.append)
+        failures = []
+        finished = []
+        worker.failed.connect(failures.append)
+        worker.finished.connect(finished.append)
 
         with patch(
             "ui.ai_chat.ask_model",
-            side_effect=[
-                RuntimeError("context length exceeded"),
-                RuntimeError("context length exceeded"),
-                RuntimeError("context length exceeded"),
-                RuntimeError("context length exceeded"),
-                "OK",
-            ],
-        ) as ask:
+            side_effect=RuntimeError("context length exceeded"),
+        ) as ask, patch("ui.ai_chat.logger.exception"):
             worker.run()
 
-        self.assertEqual(5, ask.call_count)
-        self.assertEqual([2048, 4096, 8192, 16384, 32768], [call.args[3] for call in ask.call_args_list])
-        self.assertEqual([4096, 8192, 16384, 32768], changed_contexts)
+        ask.assert_called_once()
+        self.assertEqual([], finished)
+        self.assertEqual(["上下文不足，请在左下角选择更大的上下文后重试"], failures)
 
     def test_ai_worker_does_not_retry_non_context_errors(self):
         worker = AIWorker("继续分析", payload(), "qwen2:latest", 2048, max_n_ctx=16384)
@@ -834,7 +918,7 @@ class AIChatDirectModelTests(unittest.TestCase):
         self.assertIn("background-color: #FFF1F0", rendered)
         self.assertIn("network failed", rendered)
 
-    def test_context_label_updates_with_retry_context_and_same_reason(self):
+    def test_context_combo_updates_with_selected_context_and_reason(self):
         dialog = AIChatDialog.__new__(AIChatDialog)
         dialog.current_context_recommendation = ContextRecommendation(
             n_ctx=2048,
@@ -842,12 +926,16 @@ class AIChatDirectModelTests(unittest.TestCase):
             hardware=HardwareSnapshot(),
             max_n_ctx=8192,
         )
-        dialog.ctx_label = FakeLabel()
+        dialog.current_context_n_ctx = 2048
+        dialog.context_options = [2048, 4096, 8192]
+        dialog.context_combo = FakeCombo()
+        dialog.context_reason_label = FakeLabel()
 
-        AIChatDialog.update_context_label(dialog, 4096)
+        AIChatDialog.set_context_n_ctx(dialog, 4096)
 
-        self.assertIn("4096", dialog.ctx_label.text)
-        self.assertIn("15.6GB 内存 / 4GB 显存", dialog.ctx_label.text)
+        self.assertEqual("4096", dialog.context_combo.currentText())
+        self.assertEqual(["2048", "4096", "8192"], dialog.context_combo.items)
+        self.assertEqual("（15.6GB 内存 / 4GB 显存）", dialog.context_reason_label.text)
 
     def make_query_tab_stub(self):
         tab = QueryTab.__new__(QueryTab)
@@ -1083,6 +1171,13 @@ class AIChatDirectModelTests(unittest.TestCase):
             hardware=HardwareSnapshot(),
             max_n_ctx=4096,
         )
+        dialog.current_context_n_ctx = 4096
+        dialog.context_options = [2048, 4096]
+        dialog._selected_payload_cache_key = None
+        dialog._selected_payload_cache = None
+        dialog._payload_token_cache_key = None
+        dialog._payload_token_cache_value = None
+        dialog.enabled_tables = {}
         dialog.column_checks = {
             "base_info": {
                 "sequence": FakeCheck(True),
@@ -1102,6 +1197,26 @@ class AIChatDirectModelTests(unittest.TestCase):
         self.assertFalse(dialog.input_field.clear_called)
         self.assertFalse(dialog.send_btn.enabled)
         self.assertTrue(dialog.input_field.enabled)
+
+    def test_start_inference_uses_user_selected_context(self):
+        dialog = self.make_chat_dialog_stub()
+        dialog.current_context_n_ctx = 8192
+
+        class FakeThread:
+            def __init__(self, target):
+                self.target = target
+                self.daemon = False
+                self.started = False
+
+            def start(self):
+                self.started = True
+
+        with patch("ui.ai_chat.threading.Thread", FakeThread):
+            AIChatDialog.start_inference(dialog)
+
+        self.assertIsNotNone(dialog.worker)
+        self.assertEqual(8192, dialog.worker.n_ctx)
+        self.assertTrue(dialog.worker_thread.started)
 
     def test_handle_error_does_not_store_error_as_assistant_history(self):
         dialog = self.make_chat_dialog_stub()
