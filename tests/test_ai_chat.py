@@ -911,7 +911,7 @@ class AIChatDirectModelTests(unittest.TestCase):
         self.assertEqual(history, kwargs["history_messages"])
 
     def test_ai_worker_context_errors_fail_without_auto_retry(self):
-        worker = AIWorker("继续分析", payload(), "qwen2:latest", 2048, max_n_ctx=32768)
+        worker = AIWorker("继续分析", payload(), "qwen2:latest", 2048)
         failures = []
         finished = []
         worker.failed.connect(failures.append)
@@ -928,7 +928,7 @@ class AIChatDirectModelTests(unittest.TestCase):
         self.assertEqual(["上下文不足，请在左下角选择更大的上下文后重试"], failures)
 
     def test_ai_worker_does_not_retry_non_context_errors(self):
-        worker = AIWorker("继续分析", payload(), "qwen2:latest", 2048, max_n_ctx=16384)
+        worker = AIWorker("继续分析", payload(), "qwen2:latest", 2048)
 
         with patch("ui.ai_chat.ask_model", side_effect=RuntimeError("network failed")) as ask, \
                 patch("ui.ai_chat.logger.exception"):
@@ -937,7 +937,7 @@ class AIChatDirectModelTests(unittest.TestCase):
         ask.assert_called_once()
 
     def test_ai_worker_emits_failed_for_model_errors(self):
-        worker = AIWorker("继续分析", payload(), "qwen2:latest", 2048, max_n_ctx=16384)
+        worker = AIWorker("继续分析", payload(), "qwen2:latest", 2048)
         failures = []
         finished = []
         worker.failed.connect(failures.append)
@@ -1173,9 +1173,13 @@ class AIChatDirectModelTests(unittest.TestCase):
 
         self.assertEqual({"role": "user", "content": "上一轮问题"}, messages[1])
         self.assertEqual({"role": "assistant", "content": "上一轮回答"}, messages[2])
-        self.assertIn('"department": "研发部"', all_text)
+        self.assertIn('"department":"研发部"', all_text)
         self.assertNotIn("这条不应进入历史", all_text)
         self.assertNotIn("current_grade", all_text)
+        self.assertIn("历史消息只用于补足上下文", messages[0]["content"])
+        self.assertIn("当前筛选数据:", messages[-1]["content"])
+        self.assertNotIn("筛选后的数据如下", messages[-1]["content"])
+        self.assertNotIn("\n  ", messages[-1]["content"])
 
     def test_history_keeps_recent_ten_rounds_as_twenty_messages(self):
         history = []
@@ -1202,9 +1206,9 @@ class AIChatDirectModelTests(unittest.TestCase):
         prompt_text = "\n".join(message["content"] for message in body["messages"])
         self.assertEqual("qwen2:latest", body["model"])
         self.assertEqual({"num_ctx": 8192}, body["options"])
-        self.assertIn('"sequence": 1', prompt_text)
-        self.assertIn('"name": "张三"', prompt_text)
-        self.assertIn('"department": "研发部"', prompt_text)
+        self.assertIn('"sequence":1', prompt_text)
+        self.assertIn('"name":"张三"', prompt_text)
+        self.assertIn('"department":"研发部"', prompt_text)
         self.assertNotIn("current_grade", prompt_text)
         self.assertNotIn("一级", prompt_text)
 
@@ -1303,12 +1307,33 @@ class AIChatDirectModelTests(unittest.TestCase):
         dialog = self.make_chat_dialog_stub()
         dialog.history_messages = [{"role": "user", "content": "上一轮问题"}]
         dialog.is_inference_running = True
+        dialog._pending_history_length = 1
 
         AIChatDialog.handle_error(dialog, "network failed")
 
         self.assertEqual([{"role": "user", "content": "上一轮问题"}], dialog.history_messages)
         self.assertIn("network failed", dialog.chat_history.items[-1])
         self.assertTrue(dialog.send_btn.enabled)
+
+    def test_handle_error_rolls_back_unfinished_user_turn(self):
+        dialog = self.make_chat_dialog_stub()
+        dialog.history_messages = [
+            {"role": "user", "content": "上一轮问题"},
+            {"role": "assistant", "content": "上一轮回答"},
+        ]
+        dialog.is_inference_running = True
+        dialog._pending_history_length = 2
+
+        AIChatDialog.handle_error(dialog, "network failed")
+
+        self.assertEqual(
+            [
+                {"role": "user", "content": "上一轮问题"},
+                {"role": "assistant", "content": "上一轮回答"},
+            ],
+            dialog.history_messages,
+        )
+        self.assertIsNone(dialog._pending_history_length)
 
 
 if __name__ == "__main__":

@@ -508,7 +508,6 @@ class AIWorker(QObject):
         model_name,
         n_ctx,
         history_messages=None,
-        max_n_ctx=None,
     ):
         super().__init__()
         self.question = question
@@ -923,24 +922,6 @@ def filter_analysis_payload_by_columns(analysis_payload: dict, column_selection:
     }
 
 
-def count_payload_content(analysis_payload: dict) -> tuple:
-    tables = dict((analysis_payload or {}).get("tables") or {})
-    table_count = 0
-    column_count = 0
-    row_count = 0
-    for table in tables.values():
-        if not isinstance(table, dict):
-            continue
-        fields = dict(table.get("field_labels") or {})
-        rows = list(table.get("rows") or [])
-        if not fields:
-            continue
-        table_count += 1
-        column_count += len(fields)
-        row_count += len(rows)
-    return table_count, column_count, row_count
-
-
 def _is_cjk_char(char: str) -> bool:
     codepoint = ord(char)
     return (
@@ -963,7 +944,7 @@ def estimate_text_tokens(text: str) -> int:
 
 
 def estimate_payload_tokens(analysis_payload: dict) -> int:
-    payload_text = json.dumps(analysis_payload or {}, ensure_ascii=False, indent=2, default=str)
+    payload_text = json.dumps(analysis_payload or {}, ensure_ascii=False, separators=(",", ":"), default=str)
     raw_tokens = estimate_text_tokens(payload_text)
     return max(1, math.ceil(raw_tokens * (1 + CONTEXT_BUFFER_RATIO)))
 
@@ -1676,6 +1657,7 @@ class AIChatDialog(QDialog):
         self.is_inference_running = False
         self.worker = None
         self.worker_thread = None
+        self._pending_history_length = None
         self.current_context_n_ctx = None
         self.context_options = []
         self.column_checks = {}
@@ -2330,6 +2312,7 @@ class AIChatDialog(QDialog):
     def clear_chat(self):
         """清空对话历史。"""
         self.history_messages = []
+        self._pending_history_length = None
         self.chat_history.clear()
         self.status_label.setText("对话已清空，可继续提问。")
 
@@ -2366,6 +2349,7 @@ class AIChatDialog(QDialog):
         self.update_action_state()
 
         history_snapshot = [dict(message) for message in self.history_messages]
+        self._pending_history_length = len(self.history_messages)
         self.history_messages.append({"role": "user", "content": question})
 
         self.worker = AIWorker(
@@ -2385,11 +2369,16 @@ class AIChatDialog(QDialog):
         final_answer = str(response).strip()
         self.history_messages.append({"role": "assistant", "content": final_answer})
         self.append_message("assistant", final_answer)
+        self._pending_history_length = None
         self.finish_inference("就绪")
 
     def handle_error(self, message):
         error_text = str(message).strip() or "未知错误"
         self.append_message("assistant", f"AI 运行出错: {error_text}", is_error=True)
+        pending_length = getattr(self, "_pending_history_length", None)
+        if isinstance(pending_length, int) and pending_length >= 0:
+            self.history_messages = self.history_messages[:pending_length]
+        self._pending_history_length = None
         self.finish_inference(f"分析失败：{error_text}")
 
     def append_message(self, role: str, content: str, is_error: bool = False):

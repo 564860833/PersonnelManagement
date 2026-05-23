@@ -10,7 +10,9 @@ from services.ollama_manager import ollama_api_url
 
 SYSTEM_PROMPT = (
     "你是人员信息管理系统的AI分析助手。"
-    "你只能根据用户筛选后的表格数据回答问题，不要推测未提供的内容。"
+    "只依据当前筛选后的表格数据回答问题。"
+    "历史消息只用于补足上下文；若与当前数据冲突，以当前数据为准。"
+    "不要推测未提供的内容；数据不足时直接说明不足。"
 )
 MAX_HISTORY_MESSAGES = 20
 ALLOWED_HISTORY_ROLES = {"user", "assistant"}
@@ -36,14 +38,10 @@ def build_messages(
     }
     user_prompt = "\n".join(
         [
-            "筛选后的数据如下：",
+            "当前筛选数据:",
             _to_json(data),
             "",
-            "请仅根据以上筛选后的数据回答用户问题，不要补充未提供的字段或推测不存在的信息。",
-            "如果数据不足以回答，请直接说明不足。",
-            "",
-            "用户问题：",
-            str(question),
+            f"用户问题: {question}",
         ]
     )
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
@@ -164,4 +162,4 @@ def _project_rows(rows: Sequence[dict], selected_fields: Sequence[str]) -> List[
 
 
 def _to_json(value) -> str:
-    return json.dumps(value, ensure_ascii=False, indent=2, default=str)
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)

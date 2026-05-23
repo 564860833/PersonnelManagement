@@ -36,10 +36,6 @@ class ContextRecommendation:
     max_n_ctx: int
     model_limit: Optional[int] = None
 
-    @property
-    def display_text(self) -> str:
-        return f"{self.n_ctx}（{self.reason}）"
-
 
 def recommend_context_length(
     model_name: str = "",
@@ -67,19 +63,6 @@ def recommend_context_length(
         max_n_ctx=max(1, int(hardware_max_n_ctx)),
         model_limit=resolved_model_limit,
     )
-
-
-def next_context_length(current_n_ctx: int, max_n_ctx: int) -> Optional[int]:
-    try:
-        current = int(current_n_ctx)
-        maximum = int(max_n_ctx)
-    except (TypeError, ValueError):
-        return None
-
-    if maximum <= current:
-        return None
-
-    return min(_next_context_step(current), maximum)
 
 
 def detect_hardware() -> HardwareSnapshot:
@@ -259,13 +242,6 @@ def _bytes_to_gib(value: Optional[int]) -> Optional[float]:
     if value is None or value <= 0:
         return None
     return value / GIB
-
-
-def _next_context_step(current: int) -> int:
-    step = MIN_CONTEXT_LENGTH
-    while step <= current:
-        step *= 2
-    return step
 
 
 def _floor_power_of_two(value: int) -> int:

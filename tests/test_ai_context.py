@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from services.ai_context import GIB, HardwareSnapshot, next_context_length, recommend_context_length
+from services.ai_context import GIB, HardwareSnapshot, recommend_context_length
 
 
 class FakeShowResponse:
@@ -84,22 +84,7 @@ class AIContextRecommendationTests(unittest.TestCase):
         )
 
         self.assertEqual(8192, recommendation.n_ctx)
-        self.assertIn("显存未知", recommendation.display_text)
-
-    def test_display_text_only_shows_total_memory_and_vram(self):
-        recommendation = recommend_context_length(
-            hardware=hardware(15.6, available_gib=3.3, vram_gib=4),
-            model_limit=131072,
-            fetch_model_limit=False,
-        )
-
-        self.assertIn("15.6GB 内存", recommendation.display_text)
-        self.assertIn("4GB 显存", recommendation.display_text)
-        self.assertNotIn("自动", recommendation.display_text)
-        self.assertNotIn("可用", recommendation.display_text)
-        self.assertNotIn("模型上限", recommendation.display_text)
-        self.assertEqual(2048, recommendation.n_ctx)
-        self.assertEqual(8192, recommendation.max_n_ctx)
+        self.assertEqual("16GB 内存 / 显存未知", recommendation.reason)
 
     def test_available_memory_caps_recommendation(self):
         low_available = recommend_context_length(
@@ -135,14 +120,6 @@ class AIContextRecommendationTests(unittest.TestCase):
         self.assertEqual(8192, recommendation.n_ctx)
         self.assertEqual(8192, recommendation.model_limit)
         self.assertEqual({"model": "deepseek-r1:14b"}, post.call_args.kwargs["json"])
-
-    def test_next_context_length_uses_next_step_within_maximum(self):
-        self.assertEqual(4096, next_context_length(2048, 8192))
-        self.assertEqual(8192, next_context_length(4096, 16384))
-        self.assertEqual(16384, next_context_length(8192, 16384))
-        self.assertEqual(32768, next_context_length(16384, 65536))
-        self.assertEqual(6144, next_context_length(4096, 6144))
-        self.assertIsNone(next_context_length(8192, 8192))
 
 
 if __name__ == "__main__":
