@@ -1,19 +1,29 @@
 import html
+import json
 import logging
+import math
 import threading
 
 import markdown
-from PyQt5.QtCore import QObject, Qt, pyqtSignal
+from PyQt5.QtCore import QPoint, QRect, QSize, QObject, QTimer, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
+    QButtonGroup,
     QComboBox,
     QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QLineEdit,
+    QProgressBar,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QSplitter,
+    QStackedWidget,
     QTextEdit,
     QVBoxLayout,
+    QWidget,
 )
 
 from services.ai_context import next_context_length, recommend_context_length
@@ -23,22 +33,286 @@ from ui.styles import DIALOG_BASE_STYLE, DIALOG_BUTTON_STYLE
 
 logger = logging.getLogger("AIChat")
 
+IDENTITY_FIELDS = ("sequence", "name")
+LONG_TEXT_FIELDS = {"resume_text"}
+CORE_FIELDS = {
+    "base_info": {
+        "sequence",
+        "name",
+        "current_position",
+        "current_grade",
+        "birth_date",
+        "fulltime_education",
+        "parttime_education",
+        "rewards",
+        "remarks",
+    },
+    "rewards": {
+        "sequence",
+        "name",
+        "reward_name",
+        "reward_date",
+        "punishment_name",
+        "punishment_date",
+        "impact_period",
+    },
+    "family": {
+        "sequence",
+        "name",
+        "relation",
+        "family_name",
+        "work_unit",
+        "position",
+    },
+    "resume": {
+        "sequence",
+        "name",
+    },
+}
+FIELD_GROUPS = {
+    "base_info": (
+        (
+            "基础身份信息",
+            (
+                "sequence",
+                "name",
+                "gender",
+                "birth_date",
+                "ethnicity",
+                "hometown",
+                "work_start_date",
+                "party_date",
+                "remarks",
+            ),
+        ),
+        (
+            "行政职务履历",
+            (
+                "current_position",
+                "current_position_date",
+                "current_grade",
+                "current_grade_date",
+                "next_promotion",
+                "previous_position1",
+                "previous_position1_date",
+                "previous_position2",
+                "previous_position2_date",
+            ),
+        ),
+        (
+            "检察/法律职务",
+            (
+                "entry_date",
+                "admission_date",
+                "current_legal_position",
+                "current_legal_position_date",
+                "previous_legal_position",
+                "previous_legal_position_date",
+            ),
+        ),
+        (
+            "学历与考核奖惩",
+            (
+                "fulltime_education",
+                "fulltime_school",
+                "parttime_education",
+                "parttime_school",
+                "rewards",
+                "assessment_*",
+            ),
+        ),
+    ),
+    "rewards": (
+        ("基础身份信息", ("sequence", "name")),
+        ("奖励信息", ("reward_name", "reward_date", "reward_unit", "reward_authority_type")),
+        (
+            "惩戒信息",
+            (
+                "punishment_name",
+                "punishment_date",
+                "punishment_unit",
+                "punishment_authority_type",
+                "impact_period",
+            ),
+        ),
+    ),
+    "family": (
+        ("基础身份信息", ("sequence", "name")),
+        ("家庭成员关系", ("relation", "family_name", "birth_date", "political_status")),
+        ("任职工作信息", ("work_unit", "position")),
+    ),
+    "resume": (
+        ("基础身份信息", ("sequence", "name")),
+        ("简历内容", ("resume_text",)),
+    ),
+}
+OTHER_FIELD_GROUP_LABEL = "其他字段"
+
 MODEL_PLACEHOLDER = "未检测到可用模型"
+NAV_SIDEBAR_WIDTH = 300
+CONTEXT_PRESSURE_REFRESH_DELAY_MS = 200
+CONTEXT_BUFFER_RATIO = 0.25
+CJK_TOKEN_WEIGHT = 1.8
+ASCII_TOKEN_WEIGHT = 0.3
+WHITESPACE_TOKEN_WEIGHT = 0.05
 
 AI_CHAT_STYLE = """
+QSplitter::handle {
+    background-color: #E5EAF0;
+}
+QSplitter::handle:hover {
+    background-color: #8BB6E8;
+}
+QFrame#aiSidebarPanel,
 QFrame#aiHeaderPanel,
-QFrame#aiInputPanel {
+QFrame#aiColumnPanel,
+QFrame#aiInputPanel,
+QFrame#aiSidebarSection,
+QFrame#aiFieldPageHeader {
     background-color: #FFFFFF;
     border: 1px solid #E5EAF0;
     border-radius: 8px;
+}
+QFrame#aiSidebarPanel {
+    padding: 0;
+}
+QFrame#aiSidebarHeader,
+QFrame#aiSidebarFooter {
+    background-color: transparent;
+}
+QWidget#aiNavBody,
+QWidget#aiFieldScrollContent {
+    background-color: transparent;
 }
 QLabel#aiDialogTitle {
     color: #174A8B;
     font-size: 20px;
     font-weight: bold;
 }
+QLabel#aiSidebarSubtitle,
+QLabel#aiSectionTitle,
+QLabel#aiWorkspaceTitle,
+QLabel#aiFieldPageTitle {
+    color: #174A8B;
+    font-weight: bold;
+}
+QLabel#aiSidebarTitle {
+    color: #174A8B;
+    font-size: 17px;
+    font-weight: bold;
+}
+QLabel#aiSidebarSubtitle {
+    color: #57606A;
+    font-size: 12px;
+}
+QLabel#aiSectionMeta {
+    color: #57606A;
+}
 QLabel#aiContextLabel,
+QLabel#aiColumnSummary,
 QLabel#aiFooterStatus {
+    color: #57606A;
+}
+QLabel#aiTableTitle {
+    color: #174A8B;
+    font-weight: bold;
+}
+QPushButton#aiNavButton {
+    text-align: left;
+    padding: 10px 12px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background-color: transparent;
+    color: #24292F;
+    font-weight: bold;
+}
+QPushButton#aiNavButton:hover {
+    background-color: #F7FBFF;
+    border-color: #E5EAF0;
+}
+QPushButton#aiNavButton:checked {
+    color: #174A8B;
+    background-color: #EAF2FB;
+    border-color: #8BB6E8;
+}
+QLabel#aiNavSummary,
+QLabel#aiColumnSummary,
+QLabel#aiFieldPageMeta,
+QLabel#aiFieldPageBadge,
+QLabel#aiPressureValue,
+QLabel#aiPressureHint {
+    color: #57606A;
+}
+QLabel#aiFieldPageBadge,
+QLabel#aiNavSummary,
+QLabel#aiColumnSummary {
+    padding: 3px 9px;
+    border-radius: 999px;
+    background-color: #EAF2FB;
+    border: 1px solid #8BB6E8;
+    color: #174A8B;
+    font-weight: bold;
+}
+QScrollArea#aiColumnScroll {
+    border: none;
+    background-color: transparent;
+}
+QWidget#aiColumnContent {
+    background-color: transparent;
+}
+QFrame#aiFieldScrollWrap {
+    background-color: transparent;
+}
+QFrame#aiFieldGroupBlock {
+    background-color: #FFFFFF;
+    border: 1px solid #E5EAF0;
+    border-radius: 8px;
+}
+QFrame#aiFieldGroupHeader {
+    background-color: #F7FBFF;
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+}
+QLabel#aiFieldGroupTitle {
+    color: #174A8B;
+    font-weight: bold;
+}
+QLabel#aiFieldGroupBadge {
+    padding: 3px 8px;
+    border-radius: 999px;
+    background-color: #FFFFFF;
+    border: 1px solid #8BB6E8;
+    color: #174A8B;
+    font-weight: bold;
+}
+QLabel#aiPressureValue {
+    color: #174A8B;
+    font-weight: bold;
+}
+QLabel#aiPressureHint {
+    font-size: 12px;
+}
+QPushButton#aiFieldTag {
+    text-align: left;
+    padding: 8px 12px;
+    border-radius: 999px;
+    border: 1px solid #D0D7DE;
+    background-color: #FFFFFF;
+    color: #24292F;
+}
+QPushButton#aiFieldTag:hover {
+    border-color: #8BB6E8;
+    background-color: #F7FBFF;
+}
+QPushButton#aiFieldTag:checked {
+    border-color: #174A8B;
+    background-color: #EAF2FB;
+    color: #174A8B;
+    font-weight: bold;
+}
+QPushButton#aiFieldTag:disabled {
+    border-color: #D0D7DE;
+    background-color: #F6F8FA;
     color: #57606A;
 }
 QLabel#aiModelStatus {
@@ -66,6 +340,25 @@ QTextEdit#aiHistory {
     border: 1px solid #E5EAF0;
     border-radius: 8px;
     padding: 12px;
+}
+QProgressBar#aiContextPressureBar {
+    min-height: 12px;
+    max-height: 12px;
+    border: 1px solid #D0D7DE;
+    border-radius: 6px;
+    background-color: #F6F8FA;
+}
+QProgressBar#aiContextPressureBar::chunk {
+    border-radius: 6px;
+}
+QProgressBar#aiContextPressureBar[state="safe"]::chunk {
+    background-color: #2DA44E;
+}
+QProgressBar#aiContextPressureBar[state="warn"]::chunk {
+    background-color: #D97706;
+}
+QProgressBar#aiContextPressureBar[state="danger"]::chunk {
+    background-color: #DC2626;
 }
 QLineEdit#aiQuestionInput {
     min-height: 38px;
@@ -302,6 +595,569 @@ def style_markdown_tables(rendered_html: str) -> str:
     )
 
 
+def default_column_checked(table_name: str, field_name: str) -> bool:
+    if field_name in IDENTITY_FIELDS:
+        return True
+    if field_name in LONG_TEXT_FIELDS:
+        return False
+    if field_name.startswith("assessment_"):
+        return True
+    return field_name in CORE_FIELDS.get(table_name, set())
+
+
+def reset_column_checked(field_name: str) -> bool:
+    return field_name in IDENTITY_FIELDS
+
+
+def _field_matches_group(field_name: str, patterns) -> bool:
+    for pattern in patterns or ():
+        pattern = str(pattern or "").strip()
+        if not pattern:
+            continue
+        if pattern.endswith("*") and field_name.startswith(pattern[:-1]):
+            return True
+        if field_name == pattern:
+            return True
+    return False
+
+
+def group_columns_for_table(table_name: str, columns) -> list:
+    valid_columns = []
+    for column in columns or []:
+        if not isinstance(column, dict):
+            continue
+        field_name = str(column.get("name", "")).strip()
+        if not field_name:
+            continue
+        valid_columns.append(column)
+
+    assigned = set()
+    groups = []
+    for group_label, patterns in FIELD_GROUPS.get(table_name, ()):
+        group_columns = []
+        for column in valid_columns:
+            field_name = str(column.get("name", "")).strip()
+            if field_name in assigned:
+                continue
+            if _field_matches_group(field_name, patterns):
+                group_columns.append(column)
+                assigned.add(field_name)
+        if group_columns:
+            groups.append({"label": group_label, "columns": group_columns})
+
+    other_columns = [
+        column
+        for column in valid_columns
+        if str(column.get("name", "")).strip() not in assigned
+    ]
+    if other_columns:
+        groups.append({"label": OTHER_FIELD_GROUP_LABEL, "columns": other_columns})
+    return groups
+
+
+def filter_analysis_payload_by_columns(analysis_payload: dict, column_selection: dict) -> dict:
+    schemas = dict((analysis_payload or {}).get("schemas") or {})
+    source_tables = dict((analysis_payload or {}).get("tables") or {})
+    filtered_schemas = {}
+    filtered_tables = {}
+
+    for table_name, source_table in source_tables.items():
+        schema = dict(schemas.get(table_name) or {})
+        schema_columns = list(schema.get("columns") or [])
+        valid_fields = [
+            str(column.get("name", "")).strip()
+            for column in schema_columns
+            if isinstance(column, dict) and str(column.get("name", "")).strip()
+        ]
+        selected = []
+        selected_set = set(column_selection.get(table_name) or [])
+        for field in valid_fields:
+            if field in selected_set or field in IDENTITY_FIELDS:
+                selected.append(field)
+
+        if not selected:
+            continue
+
+        field_labels = dict(source_table.get("field_labels") or {})
+        selected_labels = {field: field_labels.get(field, field) for field in selected}
+        filtered_schemas[table_name] = {
+            "table_name": schema.get("table_name") or table_name,
+            "table_label": schema.get("table_label") or source_table.get("table_label") or table_name,
+            "columns": [
+                column
+                for column in schema_columns
+                if isinstance(column, dict) and column.get("name") in selected
+            ],
+        }
+        filtered_tables[table_name] = {
+            "table_name": source_table.get("table_name") or table_name,
+            "table_label": source_table.get("table_label") or schema.get("table_label") or table_name,
+            "field_labels": selected_labels,
+            "rows": [
+                {field: row.get(field, "") for field in selected}
+                for row in list(source_table.get("rows") or [])
+            ],
+        }
+
+    return {
+        "schemas": filtered_schemas,
+        "tables": filtered_tables,
+    }
+
+
+def count_payload_content(analysis_payload: dict) -> tuple:
+    tables = dict((analysis_payload or {}).get("tables") or {})
+    table_count = 0
+    column_count = 0
+    row_count = 0
+    for table in tables.values():
+        if not isinstance(table, dict):
+            continue
+        fields = dict(table.get("field_labels") or {})
+        rows = list(table.get("rows") or [])
+        if not fields:
+            continue
+        table_count += 1
+        column_count += len(fields)
+        row_count += len(rows)
+    return table_count, column_count, row_count
+
+
+def _is_cjk_char(char: str) -> bool:
+    codepoint = ord(char)
+    return (
+        0x3400 <= codepoint <= 0x4DBF
+        or 0x4E00 <= codepoint <= 0x9FFF
+        or 0xF900 <= codepoint <= 0xFAFF
+    )
+
+
+def estimate_text_tokens(text: str) -> int:
+    total = 0.0
+    for char in str(text or ""):
+        if char.isspace():
+            total += WHITESPACE_TOKEN_WEIGHT
+        elif _is_cjk_char(char):
+            total += CJK_TOKEN_WEIGHT
+        else:
+            total += ASCII_TOKEN_WEIGHT
+    return max(1, math.ceil(total))
+
+
+def estimate_payload_tokens(analysis_payload: dict) -> int:
+    payload_text = json.dumps(analysis_payload or {}, ensure_ascii=False, indent=2, default=str)
+    raw_tokens = estimate_text_tokens(payload_text)
+    return max(1, math.ceil(raw_tokens * (1 + CONTEXT_BUFFER_RATIO)))
+
+
+def format_token_count(token_count: int) -> str:
+    token_count = max(0, int(token_count or 0))
+    if token_count >= 1000:
+        return f"{token_count / 1000:.1f}k"
+    return str(token_count)
+
+
+def _safe_instance_value(obj, name: str, default=None):
+    try:
+        instance_dict = object.__getattribute__(obj, "__dict__")
+    except Exception:
+        return default
+    return instance_dict.get(name, default)
+
+
+class FlowLayout(QLayout):
+    def __init__(self, parent=None, margin=0, h_spacing=8, v_spacing=8):
+        super().__init__(parent)
+        self._items = []
+        self._h_spacing = int(h_spacing)
+        self._v_spacing = int(v_spacing)
+        self.setContentsMargins(margin, margin, margin, margin)
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, index):
+        if 0 <= index < len(self._items):
+            return self._items[index]
+        return None
+
+    def takeAt(self, index):
+        if 0 <= index < len(self._items):
+            return self._items.pop(index)
+        return None
+
+    def expandingDirections(self):
+        return Qt.Orientations(0)
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self._do_layout(QRect(0, 0, width, 0), test_only=True)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._do_layout(rect, test_only=False)
+
+    def sizeHint(self):
+        parent = self.parentWidget()
+        if parent is not None and parent.width() > 0:
+            width = parent.width()
+            return QSize(width, self.heightForWidth(width))
+        return self.minimumSize()
+
+    def minimumSize(self):
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        margins = self.contentsMargins()
+        size += QSize(margins.left() + margins.right(), margins.top() + margins.bottom())
+        return size
+
+    def _do_layout(self, rect, test_only=False):
+        margins = self.contentsMargins()
+        effective = rect.adjusted(margins.left(), margins.top(), -margins.right(), -margins.bottom())
+        x = effective.x()
+        y = effective.y()
+        line_height = 0
+
+        for item in self._items:
+            widget = item.widget()
+            if widget is not None and not widget.isVisible():
+                continue
+            item_size = item.sizeHint()
+            next_x = x + item_size.width() + self._h_spacing
+            if next_x - self._h_spacing > effective.right() and line_height > 0:
+                x = effective.x()
+                y = y + line_height + self._v_spacing
+                next_x = x + item_size.width() + self._h_spacing
+                line_height = 0
+            if not test_only:
+                item.setGeometry(QRect(QPoint(x, y), item_size))
+            x = next_x
+            line_height = max(line_height, item_size.height())
+
+        return y + line_height - rect.y() + margins.bottom()
+
+
+class FieldGroupBlock(QFrame):
+    selection_changed = pyqtSignal(str)
+
+    def __init__(self, table_name: str, group_label: str, columns, parent=None):
+        super().__init__(parent)
+        self.table_name = table_name
+        self.group_label = group_label
+        self._columns = [column for column in columns if isinstance(column, dict)]
+        self.checkboxes = {}
+        self.action_buttons = {}
+        self.setObjectName("aiFieldGroupBlock")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        header = QFrame()
+        header.setObjectName("aiFieldGroupHeader")
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(12, 10, 12, 10)
+        header_layout.setSpacing(8)
+
+        self.title_label = QLabel(group_label)
+        self.title_label.setObjectName("aiFieldGroupTitle")
+        header_layout.addWidget(self.title_label, 1)
+
+        self.badge_label = QLabel("已选 0/0")
+        self.badge_label.setObjectName("aiFieldGroupBadge")
+        header_layout.addWidget(self.badge_label, 0, Qt.AlignVCenter)
+
+        self.all_btn = QPushButton("全选")
+        self.all_btn.setObjectName("secondaryButton")
+        self.reset_btn = QPushButton("重置")
+        self.reset_btn.setObjectName("secondaryButton")
+        self.action_buttons = {
+            "all": self.all_btn,
+            "reset": self.reset_btn,
+        }
+        header_layout.addWidget(self.all_btn)
+        header_layout.addWidget(self.reset_btn)
+        layout.addWidget(header)
+
+        body = QWidget()
+        body.setObjectName("aiFieldScrollContent")
+        body_layout = FlowLayout(margin=12, h_spacing=8, v_spacing=8)
+        body.setLayout(body_layout)
+        self.fields_wrap = body
+        self.fields_layout = body_layout
+
+        for column in self._columns:
+            field_name = str(column.get("name", "")).strip()
+            if not field_name:
+                continue
+            check = self.create_field_tag(column)
+            self.checkboxes[field_name] = check
+            body_layout.addWidget(check)
+
+        layout.addWidget(body)
+
+        self.all_btn.clicked.connect(lambda: self.set_all_fields(True))
+        self.reset_btn.clicked.connect(self.reset_fields)
+        self.refresh_badge()
+
+    def create_field_tag(self, column):
+        field_name = str(column.get("name", "")).strip()
+        label = str(column.get("label") or field_name)
+        check = QPushButton(label)
+        check.setObjectName("aiFieldTag")
+        check.setCheckable(True)
+        check.setToolTip(field_name)
+        check.setChecked(default_column_checked(self.table_name, field_name))
+        check.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        if field_name in IDENTITY_FIELDS:
+            check.setChecked(True)
+            check.setEnabled(False)
+            check.setToolTip(f"{field_name}（身份字段，必须发送）")
+        check.toggled.connect(self._handle_selection_changed)
+        return check
+
+    def _handle_selection_changed(self, *_):
+        self.refresh_badge()
+        self.selection_changed.emit(self.table_name)
+
+    def _apply_state(self, field_state_fn):
+        for field_name, check in self.checkboxes.items():
+            target_state = bool(field_state_fn(field_name, check))
+            if field_name in IDENTITY_FIELDS:
+                target_state = True
+            previous = check.blockSignals(True)
+            try:
+                check.setChecked(target_state)
+            finally:
+                check.blockSignals(previous)
+        self.refresh_badge()
+        self.selection_changed.emit(self.table_name)
+
+    def set_all_fields(self, checked: bool):
+        self._apply_state(lambda field_name, _check: True if field_name in IDENTITY_FIELDS else bool(checked))
+
+    def reset_fields(self):
+        self._apply_state(
+            lambda field_name, _check: reset_column_checked(field_name)
+        )
+
+    def selected_fields(self):
+        selected = []
+        for field_name, check in self.checkboxes.items():
+            if check.isChecked() or field_name in IDENTITY_FIELDS:
+                selected.append(field_name)
+        return selected
+
+    def selected_count(self):
+        return len(self.selected_fields())
+
+    def total_count(self):
+        return len(self.checkboxes)
+
+    def refresh_badge(self):
+        self.badge_label.setText(f"已选 {self.selected_count()}/{self.total_count() or 0}")
+
+    def reflow_fields(self, width=None):
+        fields_layout = _safe_instance_value(self, "fields_layout")
+        fields_wrap = _safe_instance_value(self, "fields_wrap")
+        if fields_layout is None or fields_wrap is None:
+            return
+        effective_width = int(width or fields_wrap.width() or self.width() or 1)
+        effective_width = max(1, effective_width)
+        content_height = fields_layout.heightForWidth(effective_width)
+        fields_wrap.setMinimumHeight(content_height)
+        fields_layout.invalidate()
+        fields_layout.setGeometry(QRect(0, 0, effective_width, max(content_height, fields_wrap.height())))
+        fields_wrap.updateGeometry()
+        fields_wrap.update()
+
+
+class FieldSelectionPage(QFrame):
+    selection_changed = pyqtSignal(str)
+    return_requested = pyqtSignal()
+
+    def __init__(self, table_name: str, table_label: str, row_count: int, columns, parent=None):
+        super().__init__(parent)
+        self.table_name = table_name
+        self.table_label = table_label
+        self.row_count = int(row_count)
+        self._columns = [column for column in columns if isinstance(column, dict)]
+        self.checkboxes = {}
+        self.group_blocks = []
+        self.action_buttons = {}
+        self.setObjectName("aiFieldSelectionPage")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        header = QFrame()
+        header.setObjectName("aiFieldPageHeader")
+        header_layout = QVBoxLayout(header)
+        header_layout.setContentsMargins(16, 14, 16, 14)
+        header_layout.setSpacing(10)
+
+        title_row = QHBoxLayout()
+        title_row.setSpacing(10)
+        title_box = QVBoxLayout()
+        title_box.setContentsMargins(0, 0, 0, 0)
+        title_box.setSpacing(3)
+        self.title_label = QLabel(table_label)
+        self.title_label.setObjectName("aiFieldPageTitle")
+        self.meta_label = QLabel(f"{self.row_count} 行数据")
+        self.meta_label.setObjectName("aiFieldPageMeta")
+        title_box.addWidget(self.title_label)
+        title_box.addWidget(self.meta_label)
+        title_row.addLayout(title_box, 1)
+
+        self.badge_label = QLabel("已选 0/0 列")
+        self.badge_label.setObjectName("aiFieldPageBadge")
+        title_row.addWidget(self.badge_label, 0, Qt.AlignTop)
+
+        self.return_btn = QPushButton("完成选择并返回对话")
+        self.return_btn.setObjectName("primaryButton")
+        self.return_btn.clicked.connect(lambda _checked=False: self.return_requested.emit())
+        title_row.addWidget(self.return_btn, 0, Qt.AlignTop)
+        header_layout.addLayout(title_row)
+
+        action_row = QHBoxLayout()
+        action_row.setSpacing(8)
+        self.core_btn = QPushButton("核心字段")
+        self.core_btn.setObjectName("secondaryButton")
+        self.all_btn = QPushButton("全选")
+        self.all_btn.setObjectName("secondaryButton")
+        self.reset_btn = QPushButton("重置")
+        self.reset_btn.setObjectName("secondaryButton")
+        self.action_buttons = {
+            "core": self.core_btn,
+            "all": self.all_btn,
+            "reset": self.reset_btn,
+        }
+        action_row.addWidget(self.core_btn)
+        action_row.addWidget(self.all_btn)
+        action_row.addWidget(self.reset_btn)
+        action_row.addStretch()
+        header_layout.addLayout(action_row)
+        layout.addWidget(header)
+
+        field_scroll = QScrollArea()
+        field_scroll.setObjectName("aiColumnScroll")
+        field_scroll.setWidgetResizable(True)
+        field_scroll.setFrameShape(QFrame.NoFrame)
+        field_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.field_scroll = field_scroll
+        groups_wrap = QWidget()
+        groups_wrap.setObjectName("aiFieldScrollContent")
+        groups_layout = QVBoxLayout(groups_wrap)
+        groups_layout.setContentsMargins(0, 0, 0, 0)
+        groups_layout.setSpacing(10)
+        self.groups_wrap = groups_wrap
+        self.groups_layout = groups_layout
+
+        for group in group_columns_for_table(table_name, self._columns):
+            block = FieldGroupBlock(
+                table_name=table_name,
+                group_label=group["label"],
+                columns=group["columns"],
+                parent=self,
+            )
+            block.selection_changed.connect(self._handle_selection_changed)
+            self.group_blocks.append(block)
+            self.checkboxes.update(block.checkboxes)
+            for action_name, button in block.action_buttons.items():
+                self.action_buttons[f"{group['label']}:{action_name}"] = button
+            groups_layout.addWidget(block)
+        groups_layout.addStretch()
+
+        field_scroll.setWidget(groups_wrap)
+        layout.addWidget(field_scroll, 1)
+
+        self.core_btn.clicked.connect(self.set_core_fields)
+        self.all_btn.clicked.connect(lambda: self.set_all_fields(True))
+        self.reset_btn.clicked.connect(self.reset_fields)
+        self.refresh_badge()
+        QTimer.singleShot(0, self.reflow_fields)
+
+    def _handle_selection_changed(self, *_):
+        self.refresh_badge()
+        self.selection_changed.emit(self.table_name)
+
+    def _apply_state(self, field_state_fn):
+        for field_name, check in self.checkboxes.items():
+            target_state = bool(field_state_fn(field_name, check))
+            if field_name in IDENTITY_FIELDS:
+                target_state = True
+            previous = check.blockSignals(True)
+            try:
+                check.setChecked(target_state)
+            finally:
+                check.blockSignals(previous)
+        self.refresh_badge()
+        self.selection_changed.emit(self.table_name)
+
+    def set_all_fields(self, checked: bool):
+        self._apply_state(lambda field_name, _check: True if field_name in IDENTITY_FIELDS else bool(checked))
+
+    def set_core_fields(self):
+        self._apply_state(
+            lambda field_name, _check: True if field_name in IDENTITY_FIELDS else default_column_checked(self.table_name, field_name)
+        )
+
+    def reset_fields(self):
+        self._apply_state(
+            lambda field_name, _check: reset_column_checked(field_name)
+        )
+
+    def selected_fields(self):
+        selected = []
+        for field_name, check in self.checkboxes.items():
+            if check.isChecked() or field_name in IDENTITY_FIELDS:
+                selected.append(field_name)
+        return selected
+
+    def selected_count(self):
+        return len(self.selected_fields())
+
+    def total_count(self):
+        return len(self.checkboxes)
+
+    def refresh_badge(self):
+        self.badge_label.setText(f"已选 {self.selected_count()}/{self.total_count() or 0} 列")
+        for block in _safe_instance_value(self, "group_blocks", []):
+            block.refresh_badge()
+
+    def reflow_fields(self):
+        group_blocks = _safe_instance_value(self, "group_blocks", [])
+        if not group_blocks:
+            return
+        width = self.width()
+        field_scroll = _safe_instance_value(self, "field_scroll")
+        if field_scroll is not None and field_scroll.viewport() is not None:
+            width = max(width, field_scroll.viewport().width())
+        width = max(1, int(width))
+        block_width = max(1, width - 4)
+        for block in group_blocks:
+            block.reflow_fields(block_width)
+        groups_wrap = _safe_instance_value(self, "groups_wrap")
+        if groups_wrap is not None:
+            groups_wrap.updateGeometry()
+            groups_wrap.update()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(0, self.reflow_fields)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        QTimer.singleShot(0, self.reflow_fields)
+
+
 class AIChatDialog(QDialog):
     def __init__(self, analysis_payload, parent=None):
         super().__init__(parent)
@@ -311,8 +1167,18 @@ class AIChatDialog(QDialog):
         self.is_inference_running = False
         self.worker = None
         self.worker_thread = None
+        self.current_context_n_ctx = None
+        self.column_checks = {}
+        self.table_pages = {}
+        self.table_nav_buttons = {}
+        self._pressure_refresh_scheduled = False
+        self._pressure_refresh_pending = False
+        self.pressure_timer = QTimer(self)
+        self.pressure_timer.setSingleShot(True)
+        self.pressure_timer.setInterval(CONTEXT_PRESSURE_REFRESH_DELAY_MS)
+        self.pressure_timer.timeout.connect(self._apply_pending_pressure_refresh)
         self.setWindowTitle("智能分析助手")
-        self.resize(960, 760)
+        self.resize(1280, 760)
         self.setup_ui()
 
     def closeEvent(self, event):
@@ -347,10 +1213,14 @@ class AIChatDialog(QDialog):
             model_name = ""
 
         self.current_context_recommendation = recommend_context_length(model_name)
+        self.current_context_n_ctx = self.current_context_recommendation.n_ctx
         self.update_context_label(self.current_context_recommendation.n_ctx)
+        if _safe_instance_value(self, "pressure_timer") is not None:
+            self.schedule_context_pressure_refresh()
         return self.current_context_recommendation
 
     def update_context_label(self, n_ctx):
+        self.current_context_n_ctx = int(n_ctx) if n_ctx else self.current_context_n_ctx
         if self.current_context_recommendation:
             self.ctx_label.setText(f"{int(n_ctx)}（{self.current_context_recommendation.reason}）")
         else:
@@ -363,6 +1233,62 @@ class AIChatDialog(QDialog):
 
         if is_running:
             self.status_label.setText(f"上下文已自动升档到 {int(n_ctx)}，正在重试分析...")
+        if _safe_instance_value(self, "pressure_timer") is not None:
+            self.schedule_context_pressure_refresh()
+
+    def schedule_context_pressure_refresh(self):
+        pressure_timer = _safe_instance_value(self, "pressure_timer")
+        if pressure_timer is None:
+            return
+        self._pressure_refresh_pending = True
+        pressure_timer.start()
+
+    def _apply_pending_pressure_refresh(self):
+        if not self._pressure_refresh_pending:
+            return
+        self._pressure_refresh_pending = False
+        self.refresh_context_pressure()
+
+    def refresh_context_pressure(self):
+        pressure_bar = _safe_instance_value(self, "pressure_bar")
+        if pressure_bar is None:
+            return
+
+        selected_payload = self.selected_analysis_payload()
+        estimated_tokens = estimate_payload_tokens(selected_payload)
+        context_limit = max(
+            1,
+            int(
+                _safe_instance_value(self, "current_context_n_ctx", None)
+                or getattr(_safe_instance_value(self, "current_context_recommendation"), "n_ctx", 4096)
+                or 4096
+            ),
+        )
+        ratio = min(1.0, estimated_tokens / context_limit)
+        percent = int(round(ratio * 100))
+
+        pressure_bar.setValue(percent)
+        if ratio < 0.5:
+            state = "safe"
+            hint = "余量充足"
+        elif ratio < 0.8:
+            state = "warn"
+            hint = "接近上限"
+        else:
+            state = "danger"
+            hint = "请减少字段"
+
+        pressure_bar.setProperty("state", state)
+        self.refresh_widget_style(pressure_bar)
+        self.pressure_value_label.setText(f"{format_token_count(estimated_tokens)} / {format_token_count(context_limit)} tokens")
+        self.pressure_hint_label.setText(hint)
+
+    def on_table_selection_changed(self, table_name: str):
+        page = _safe_instance_value(self, "table_pages", {}).get(table_name)
+        if page:
+            page.refresh_badge()
+        self.refresh_column_summary()
+        self.schedule_context_pressure_refresh()
 
     def setup_ui(self):
         layout = QVBoxLayout()
@@ -370,55 +1296,177 @@ class AIChatDialog(QDialog):
         layout.setSpacing(12)
         self.setStyleSheet(DIALOG_BASE_STYLE + DIALOG_BUTTON_STYLE + AI_CHAT_STYLE)
 
-        header_panel = QFrame()
-        header_panel.setObjectName("aiHeaderPanel")
-        header_layout = QVBoxLayout(header_panel)
-        header_layout.setContentsMargins(16, 14, 16, 14)
-        header_layout.setSpacing(10)
+        root_splitter = QSplitter(Qt.Horizontal)
+        root_splitter.setChildrenCollapsible(False)
+        root_splitter.setHandleWidth(8)
+        self.root_splitter = root_splitter
 
-        title_row = QHBoxLayout()
-        title_row.setSpacing(10)
-        title_label = QLabel("智能分析")
-        title_label.setObjectName("aiDialogTitle")
+        sidebar_panel = QFrame()
+        sidebar_panel.setObjectName("aiSidebarPanel")
+        sidebar_panel.setMinimumWidth(260)
+        sidebar_panel.setMaximumWidth(360)
+        sidebar_layout = QVBoxLayout(sidebar_panel)
+        sidebar_layout.setContentsMargins(12, 12, 12, 12)
+        sidebar_layout.setSpacing(12)
+
+        sidebar_header = QFrame()
+        sidebar_header.setObjectName("aiSidebarHeader")
+        sidebar_header_layout = QVBoxLayout(sidebar_header)
+        sidebar_header_layout.setContentsMargins(0, 0, 0, 0)
+        sidebar_header_layout.setSpacing(3)
+        self.sidebar_title_label = QLabel("智能分析")
+        self.sidebar_title_label.setObjectName("aiSidebarTitle")
+        self.sidebar_subtitle_label = QLabel("当前对话与数据表")
+        self.sidebar_subtitle_label.setObjectName("aiSidebarSubtitle")
+        sidebar_header_layout.addWidget(self.sidebar_title_label)
+        sidebar_header_layout.addWidget(self.sidebar_subtitle_label)
+        sidebar_layout.addWidget(sidebar_header)
+
+        self.nav_button_group = QButtonGroup(self)
+        self.nav_button_group.setExclusive(True)
+
+        self.chat_nav_btn = self.create_nav_button("当前对话", "聊天与提问")
+        self.chat_nav_btn.clicked.connect(lambda _checked=False: self.switch_to_chat())
+        self.nav_button_group.addButton(self.chat_nav_btn)
+        sidebar_layout.addWidget(self.chat_nav_btn)
+
+        table_header = QHBoxLayout()
+        table_header.setSpacing(8)
+        table_title = QLabel("数据表")
+        table_title.setObjectName("aiSectionTitle")
+        self.column_summary_label = QLabel()
+        self.column_summary_label.setObjectName("aiColumnSummary")
+        table_header.addWidget(table_title)
+        table_header.addStretch()
+        table_header.addWidget(self.column_summary_label)
+        sidebar_layout.addLayout(table_header)
+
+        nav_scroll = QScrollArea()
+        nav_scroll.setObjectName("aiColumnScroll")
+        nav_scroll.setWidgetResizable(True)
+        nav_scroll.setFrameShape(QFrame.NoFrame)
+        nav_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        nav_body = QWidget()
+        nav_body.setObjectName("aiNavBody")
+        self.table_nav_layout = QVBoxLayout(nav_body)
+        self.table_nav_layout.setContentsMargins(0, 0, 0, 0)
+        self.table_nav_layout.setSpacing(8)
+        self.table_nav_layout.addStretch()
+        nav_scroll.setWidget(nav_body)
+        sidebar_layout.addWidget(nav_scroll, 1)
+
+        self.sidebar_footer = self.create_global_controls_panel()
+        sidebar_layout.addWidget(self.sidebar_footer, 0)
+
+        main_panel = QFrame()
+        main_panel_layout = QVBoxLayout(main_panel)
+        main_panel_layout.setContentsMargins(0, 0, 0, 0)
+        main_panel_layout.setSpacing(0)
+
+        self.workspace_stack = QStackedWidget()
+        self.chat_page = self.create_chat_page()
+        self.workspace_stack.addWidget(self.chat_page)
+        main_panel_layout.addWidget(self.workspace_stack, 1)
+
+        root_splitter.addWidget(sidebar_panel)
+        root_splitter.addWidget(main_panel)
+        root_splitter.setStretchFactor(0, 0)
+        root_splitter.setStretchFactor(1, 1)
+        root_splitter.setSizes([NAV_SIDEBAR_WIDTH, 980])
+
+        layout.addWidget(root_splitter, 1)
+
+        self.setLayout(layout)
+        self.build_field_pages()
+        self.chat_nav_btn.setChecked(True)
+        self.refresh_models()
+        self.refresh_context_pressure()
+
+    def create_nav_button(self, title: str, subtitle: str = ""):
+        button = QPushButton(title if not subtitle else f"{title}\n{subtitle}")
+        button.setObjectName("aiNavButton")
+        button.setCheckable(True)
+        button.setMinimumHeight(50)
+        button.setCursor(Qt.PointingHandCursor)
+        return button
+
+    def create_global_controls_panel(self):
+        settings_panel = QFrame()
+        settings_panel.setObjectName("aiSidebarSection")
+        settings_layout = QVBoxLayout(settings_panel)
+        settings_layout.setContentsMargins(12, 12, 12, 12)
+        settings_layout.setSpacing(8)
+
+        settings_header = QHBoxLayout()
+        settings_header.setSpacing(8)
+        settings_title = QLabel("模型与上下文")
+        settings_title.setObjectName("aiSectionTitle")
+        settings_header.addWidget(settings_title)
+        settings_header.addStretch()
         self.model_status_label = QLabel("正在初始化")
         self.model_status_label.setObjectName("aiModelStatus")
         self.model_status_label.setProperty("state", "busy")
-        title_row.addWidget(title_label)
-        title_row.addStretch()
-        title_row.addWidget(self.model_status_label, 0, Qt.AlignRight)
-        header_layout.addLayout(title_row)
+        settings_header.addWidget(self.model_status_label)
+        settings_layout.addLayout(settings_header)
 
-        settings_layout = QHBoxLayout()
-        settings_layout.setSpacing(8)
-        settings_layout.addWidget(QLabel("模型"))
         self.model_combo = QComboBox()
-        self.model_combo.setMinimumWidth(220)
         self.model_combo.currentTextChanged.connect(self.refresh_context_recommendation)
         settings_layout.addWidget(self.model_combo)
 
+        action_row = QHBoxLayout()
+        action_row.setSpacing(8)
         self.refresh_btn = QPushButton("刷新")
         self.refresh_btn.setObjectName("secondaryButton")
         self.refresh_btn.clicked.connect(self.refresh_models)
-        settings_layout.addWidget(self.refresh_btn)
-
-        settings_layout.addSpacing(14)
-        settings_layout.addWidget(QLabel("上下文"))
-        self.ctx_label = QLabel("自动检测中...")
-        self.ctx_label.setObjectName("aiContextLabel")
-        settings_layout.addWidget(self.ctx_label, 1)
-
         self.clear_btn = QPushButton("清空对话")
         self.clear_btn.setObjectName("secondaryButton")
         self.clear_btn.clicked.connect(self.clear_chat)
-        settings_layout.addWidget(self.clear_btn)
-        header_layout.addLayout(settings_layout)
-        layout.addWidget(header_panel)
+        action_row.addWidget(self.refresh_btn)
+        action_row.addWidget(self.clear_btn)
+        settings_layout.addLayout(action_row)
+
+        pressure_row = QHBoxLayout()
+        pressure_row.setSpacing(8)
+        pressure_label = QLabel("上下文压力")
+        pressure_label.setObjectName("aiSectionTitle")
+        pressure_row.addWidget(pressure_label)
+        pressure_row.addStretch()
+        self.ctx_label = QLabel("自动检测中...")
+        self.ctx_label.setObjectName("aiContextLabel")
+        pressure_row.addWidget(self.ctx_label)
+        settings_layout.addLayout(pressure_row)
+
+        self.pressure_bar = QProgressBar()
+        self.pressure_bar.setObjectName("aiContextPressureBar")
+        self.pressure_bar.setRange(0, 100)
+        self.pressure_bar.setValue(0)
+        self.pressure_bar.setTextVisible(False)
+        self.pressure_bar.setProperty("state", "safe")
+        settings_layout.addWidget(self.pressure_bar)
+
+        pressure_meta_row = QHBoxLayout()
+        pressure_meta_row.setSpacing(8)
+        self.pressure_value_label = QLabel("0 / 0 tokens")
+        self.pressure_value_label.setObjectName("aiPressureValue")
+        self.pressure_hint_label = QLabel("余量充足")
+        self.pressure_hint_label.setObjectName("aiPressureHint")
+        pressure_meta_row.addWidget(self.pressure_value_label)
+        pressure_meta_row.addStretch()
+        pressure_meta_row.addWidget(self.pressure_hint_label)
+        settings_layout.addLayout(pressure_meta_row)
+        return settings_panel
+
+    def create_chat_page(self):
+        chat_page = QWidget()
+        chat_layout = QVBoxLayout(chat_page)
+        chat_layout.setContentsMargins(0, 0, 0, 0)
+        chat_layout.setSpacing(10)
 
         self.chat_history = QTextEdit()
         self.chat_history.setObjectName("aiHistory")
         self.chat_history.setReadOnly(True)
         self.chat_history.document().setDefaultStyleSheet(ANALYSIS_DOCUMENT_STYLE)
-        layout.addWidget(self.chat_history, 1)
+        chat_layout.addWidget(self.chat_history, 1)
 
         input_panel = QFrame()
         input_panel.setObjectName("aiInputPanel")
@@ -447,10 +1495,103 @@ class AIChatDialog(QDialog):
         self.status_label.setObjectName("aiFooterStatus")
         self.status_label.setWordWrap(True)
         input_layout.addWidget(self.status_label)
-        layout.addWidget(input_panel)
+        chat_layout.addWidget(input_panel)
+        return chat_page
 
-        self.setLayout(layout)
-        self.refresh_models()
+    def build_field_pages(self):
+        schemas = dict((self.analysis_payload or {}).get("schemas") or {})
+        tables = dict((self.analysis_payload or {}).get("tables") or {})
+        self.column_checks = {}
+
+        insert_index = max(0, self.table_nav_layout.count() - 1)
+        for table_name, schema in schemas.items():
+            table = dict(tables.get(table_name) or {})
+            columns = [column for column in schema.get("columns") or [] if isinstance(column, dict)]
+            table_label = schema.get("table_label") or table.get("table_label") or table_name
+            row_count = len(table.get("rows") or [])
+            page = FieldSelectionPage(
+                table_name=table_name,
+                table_label=table_label,
+                row_count=row_count,
+                columns=columns,
+                parent=self,
+            )
+            page.selection_changed.connect(self.on_table_selection_changed)
+            page.return_requested.connect(self.switch_to_chat)
+            self.table_pages[table_name] = page
+            self.column_checks[table_name] = page.checkboxes
+            self.workspace_stack.addWidget(page)
+
+            nav_button = self.create_nav_button(table_label)
+            nav_button.clicked.connect(lambda _checked=False, name=table_name: self.switch_to_table(name))
+            self.table_nav_buttons[table_name] = nav_button
+            self.nav_button_group.addButton(nav_button)
+            self.table_nav_layout.insertWidget(insert_index, nav_button)
+            insert_index += 1
+
+        self.refresh_table_navigation()
+        self.refresh_column_summary()
+        self.schedule_context_pressure_refresh()
+
+    def switch_to_chat(self):
+        stack = _safe_instance_value(self, "workspace_stack")
+        chat_page = _safe_instance_value(self, "chat_page")
+        if stack is not None and chat_page is not None:
+            stack.setCurrentWidget(chat_page)
+        chat_nav_btn = _safe_instance_value(self, "chat_nav_btn")
+        if chat_nav_btn is not None:
+            chat_nav_btn.setChecked(True)
+
+    def switch_to_table(self, table_name: str):
+        page = _safe_instance_value(self, "table_pages", {}).get(table_name)
+        stack = _safe_instance_value(self, "workspace_stack")
+        if stack is not None and page is not None:
+            stack.setCurrentWidget(page)
+            QTimer.singleShot(0, page.reflow_fields)
+        nav_button = _safe_instance_value(self, "table_nav_buttons", {}).get(table_name)
+        if nav_button is not None:
+            nav_button.setChecked(True)
+
+    def refresh_table_navigation(self):
+        for table_name, page in _safe_instance_value(self, "table_pages", {}).items():
+            nav_button = _safe_instance_value(self, "table_nav_buttons", {}).get(table_name)
+            if page is None:
+                continue
+            page.refresh_badge()
+            if nav_button is not None:
+                selected_count = page.selected_count()
+                total_count = page.total_count()
+                nav_button.setText(f"{page.table_label}\n已选 {selected_count}/{total_count}")
+                nav_button.setToolTip(f"{page.table_label} · {page.row_count} 行 · 已选 {selected_count}/{total_count}")
+
+    def selected_column_map(self) -> dict:
+        selection = {}
+        for table_name, checks in self.column_checks.items():
+            selected = []
+            for field_name, check in checks.items():
+                if check.isChecked() or field_name in IDENTITY_FIELDS:
+                    selected.append(field_name)
+            if selected:
+                selection[table_name] = selected
+        return selection
+
+    def selected_analysis_payload(self) -> dict:
+        return filter_analysis_payload_by_columns(self.analysis_payload, self.selected_column_map())
+
+    def has_selected_analysis_payload(self) -> bool:
+        table_count, column_count, _ = count_payload_content(self.selected_analysis_payload())
+        return table_count > 0 and column_count > 0
+
+    def refresh_column_summary(self):
+        column_summary_label = _safe_instance_value(self, "column_summary_label")
+        if column_summary_label is None:
+            return
+        table_count, column_count, row_count = count_payload_content(self.selected_analysis_payload())
+        column_summary_label.setText(f"将发送 {table_count} 个表 / {column_count} 列 / {row_count} 行")
+        self.refresh_table_navigation()
+        if _safe_instance_value(self, "send_btn") is not None:
+            self.update_action_state()
+        self.schedule_context_pressure_refresh()
 
     def clear_chat(self):
         """清空对话历史。"""
@@ -472,6 +1613,12 @@ class AIChatDialog(QDialog):
         if self.is_inference_running:
             return
 
+        selected_payload = self.selected_analysis_payload()
+        if not count_payload_content(selected_payload)[1]:
+            self.status_label.setText("请至少选择一个可分析字段后再发送。")
+            self.update_action_state()
+            return
+
         recommendation = self.current_context_recommendation or self.refresh_context_recommendation(model_name)
         n_ctx = recommendation.n_ctx
 
@@ -479,7 +1626,7 @@ class AIChatDialog(QDialog):
         self.input_field.clear()
         self.is_inference_running = True
         self.set_model_status("busy", "分析中")
-        self.status_label.setText("AI 正在选择数据列并分析...")
+        self.status_label.setText("AI 正在基于已选择的数据字段分析...")
         self.update_action_state()
 
         history_snapshot = [dict(message) for message in self.history_messages]
@@ -487,7 +1634,7 @@ class AIChatDialog(QDialog):
 
         self.worker = AIWorker(
             question,
-            self.analysis_payload,
+            selected_payload,
             model_name,
             n_ctx,
             history_snapshot,
@@ -524,11 +1671,31 @@ class AIChatDialog(QDialog):
 
     def update_action_state(self):
         has_model = bool(self.selected_model_name())
-        self.send_btn.setEnabled(has_model and not self.is_inference_running)
-        self.input_field.setEnabled(not self.is_inference_running)
-        self.model_combo.setEnabled(not self.is_inference_running)
-        self.refresh_btn.setEnabled(not self.is_inference_running)
-        self.clear_btn.setEnabled(not self.is_inference_running)
+        has_selected_payload = self.has_selected_analysis_payload()
+        send_btn = _safe_instance_value(self, "send_btn")
+        input_field = _safe_instance_value(self, "input_field")
+        model_combo = _safe_instance_value(self, "model_combo")
+        refresh_btn = _safe_instance_value(self, "refresh_btn")
+        clear_btn = _safe_instance_value(self, "clear_btn")
+        if send_btn is not None:
+            send_btn.setEnabled(has_model and has_selected_payload and not self.is_inference_running)
+        if input_field is not None:
+            input_field.setEnabled(not self.is_inference_running)
+        if model_combo is not None:
+            model_combo.setEnabled(not self.is_inference_running)
+        if refresh_btn is not None:
+            refresh_btn.setEnabled(not self.is_inference_running)
+        if clear_btn is not None:
+            clear_btn.setEnabled(not self.is_inference_running)
+        if _safe_instance_value(self, "chat_nav_btn") is not None:
+            _safe_instance_value(self, "chat_nav_btn").setEnabled(not self.is_inference_running)
+        for nav_button in _safe_instance_value(self, "table_nav_buttons", {}).values():
+            nav_button.setEnabled(not self.is_inference_running)
+        for page in _safe_instance_value(self, "table_pages", {}).values():
+            for field_name, check in page.checkboxes.items():
+                check.setEnabled(field_name not in IDENTITY_FIELDS and not self.is_inference_running)
+            for button in page.action_buttons.values():
+                button.setEnabled(not self.is_inference_running)
 
     def selected_model_name(self) -> str:
         model_name = self.model_combo.currentText().strip()

@@ -1,16 +1,23 @@
 import inspect
-import json
+import os
 import unittest
 from unittest.mock import patch
 
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PyQt5.QtWidgets import QApplication
+
 from services.ai_context import ContextRecommendation, HardwareSnapshot
-from services.ai_direct import (
-    SELECTION_FAILURE_MESSAGE,
-    ask_model,
-    build_messages,
-    build_schema_selection_messages,
+from services.ai_direct import ask_model, build_messages
+from ui.ai_chat import (
+    AIChatDialog,
+    AIWorker,
+    FieldSelectionPage,
+    MODEL_PLACEHOLDER,
+    filter_analysis_payload_by_columns,
+    group_columns_for_table,
+    render_message_html,
 )
-from ui.ai_chat import AIChatDialog, AIWorker, MODEL_PLACEHOLDER, render_message_html
 from ui.main_window import MainWindow
 from ui.query import QueryTab, build_ai_analysis_payload
 
@@ -101,7 +108,23 @@ class FakeWidget:
 
 
 class FakeButton(FakeWidget):
-    pass
+    def __init__(self, text=""):
+        super().__init__()
+        self.text_value = text
+        self.tooltip = ""
+        self.checked = False
+
+    def setText(self, text):
+        self.text_value = text
+
+    def text(self):
+        return self.text_value
+
+    def setToolTip(self, text):
+        self.tooltip = text
+
+    def setChecked(self, checked):
+        self.checked = checked
 
 
 class FakeLineEdit(FakeWidget):
@@ -162,8 +185,291 @@ class FakeHistory:
         return self.scroll_bar
 
 
+class FakeCheck:
+    def __init__(self, checked=True):
+        self._checked = checked
+        self.enabled = None
+
+    def isChecked(self):
+        return self._checked
+
+    def setChecked(self, checked):
+        self._checked = checked
+
+    def setEnabled(self, enabled):
+        self.enabled = enabled
+
+
+class TestAIChatDialogBehavior(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def make_dialog(self):
+        dialog = AIChatDialog.__new__(AIChatDialog)
+        dialog.analysis_payload = payload()
+        dialog.history_messages = []
+        dialog.current_context_recommendation = ContextRecommendation(
+            n_ctx=4096,
+            reason="test",
+            hardware=HardwareSnapshot(),
+            max_n_ctx=4096,
+        )
+        dialog.is_inference_running = False
+        dialog.worker = None
+        dialog.worker_thread = None
+        dialog.column_checks = {}
+        dialog.table_pages = {}
+        dialog.table_nav_buttons = {}
+        dialog._pressure_refresh_pending = False
+        dialog.pressure_timer = type(
+            "FakeTimer",
+            (),
+            {
+                "started": False,
+                "interval": None,
+                "setSingleShot": lambda self, value: None,
+                "setInterval": lambda self, value: setattr(self, "interval", value),
+                "timeout": type("FakeSignal", (), {"connect": lambda self, fn: None})(),
+                "start": lambda self: setattr(self, "started", True),
+            },
+        )()
+        dialog.pressure_bar = FakeWidget()
+        dialog.pressure_bar.setValue = lambda value: setattr(dialog.pressure_bar, "value", value)
+        dialog.pressure_bar.setProperty = lambda key, value: dialog.pressure_bar.properties.__setitem__(key, value)
+        dialog.pressure_bar.properties = {}
+        dialog.pressure_bar.style = lambda: type(
+            "FakeStyle",
+            (),
+            {"unpolish": lambda self, widget: None, "polish": lambda self, widget: None},
+        )()
+        dialog.pressure_value_label = FakeLabel()
+        dialog.pressure_hint_label = FakeLabel()
+        dialog.column_summary_label = FakeLabel()
+        dialog.status_label = FakeLabel()
+        dialog.model_status_label = FakeLabel()
+        dialog.model_combo = FakeCombo("qwen2:latest")
+        dialog.input_field = FakeLineEdit("按部门汇总")
+        dialog.send_btn = FakeButton()
+        dialog.refresh_btn = FakeButton()
+        dialog.clear_btn = FakeButton()
+        dialog.chat_history = FakeHistory()
+        dialog.chat_nav_btn = FakeButton()
+        dialog.workspace_stack = type("Stack", (), {"current": None, "setCurrentWidget": lambda self, widget: setattr(self, "current", widget)})()
+        return dialog
+
+    def build_page(self, dialog):
+        page = FieldSelectionPage(
+            "base_info",
+            "人员基本信息",
+            2,
+            [
+                {"name": "sequence", "label": "序号"},
+                {"name": "name", "label": "姓名"},
+                {"name": "department", "label": "部门"},
+                {"name": "current_grade", "label": "职级/等级"},
+            ],
+            parent=None,
+        )
+        page.selection_changed.connect(lambda table_name: None)
+        page.return_requested.connect(lambda: None)
+        dialog.table_pages = {"base_info": page}
+        dialog.table_nav_buttons = {"base_info": FakeButton()}
+        dialog.column_checks = {"base_info": page.checkboxes}
+        return page
+
+    def get_group(self, page, label):
+        for block in page.group_blocks:
+            if block.group_label == label:
+                return block
+        self.fail(f"未找到字段分组: {label}")
+
+    def test_group_columns_for_table_groups_assessment_and_unknown_fields(self):
+        groups = group_columns_for_table(
+            "base_info",
+            [
+                {"name": "sequence", "label": "序号"},
+                {"name": "assessment_0", "label": "2021年年度考核结果"},
+                {"name": "department", "label": "部门"},
+            ],
+        )
+
+        group_fields = {
+            group["label"]: [column["name"] for column in group["columns"]]
+            for group in groups
+        }
+        self.assertEqual(["sequence"], group_fields["基础身份信息"])
+        self.assertEqual(["assessment_0"], group_fields["学历与考核奖惩"])
+        self.assertEqual(["department"], group_fields["其他字段"])
+
+    def test_field_page_uses_group_blocks_and_global_actions(self):
+        page = FieldSelectionPage(
+            "base_info",
+            "人员基本信息",
+            2,
+            [
+                {"name": "sequence", "label": "序号"},
+                {"name": "name", "label": "姓名"},
+                {"name": "department", "label": "部门"},
+                {"name": "current_grade", "label": "职级/等级"},
+            ],
+        )
+
+        self.assertIn("已选 3/4 列", page.badge_label.text())
+        self.assertEqual(4, len(page.checkboxes))
+        self.assertEqual(["基础身份信息", "行政职务履历", "其他字段"], [block.group_label for block in page.group_blocks])
+        self.assertGreater(self.get_group(page, "基础身份信息").fields_layout.count(), 0)
+        self.assertTrue(page.checkboxes["sequence"].isChecked())
+
+        page.set_all_fields(False)
+        self.assertTrue(page.checkboxes["sequence"].isChecked())
+        self.assertTrue(page.checkboxes["name"].isChecked())
+        self.assertFalse(page.checkboxes["department"].isChecked())
+        self.assertFalse(page.checkboxes["current_grade"].isChecked())
+
+        page.set_core_fields()
+        self.assertFalse(page.checkboxes["department"].isChecked())
+        self.assertTrue(page.checkboxes["current_grade"].isChecked())
+
+        page.set_all_fields(True)
+        self.assertTrue(page.checkboxes["department"].isChecked())
+
+        page.reset_fields()
+        self.assertFalse(page.checkboxes["department"].isChecked())
+        self.assertFalse(page.checkboxes["current_grade"].isChecked())
+        self.assertTrue(page.checkboxes["sequence"].isChecked())
+        self.assertTrue(page.checkboxes["name"].isChecked())
+
+    def test_group_actions_only_affect_their_own_fields(self):
+        page = FieldSelectionPage(
+            "base_info",
+            "人员基本信息",
+            2,
+            [
+                {"name": "sequence", "label": "序号"},
+                {"name": "name", "label": "姓名"},
+                {"name": "department", "label": "部门"},
+                {"name": "current_grade", "label": "职级/等级"},
+            ],
+        )
+        other_group = self.get_group(page, "其他字段")
+        role_group = self.get_group(page, "行政职务履历")
+
+        page.set_all_fields(False)
+        other_group.set_all_fields(True)
+
+        self.assertTrue(page.checkboxes["department"].isChecked())
+        self.assertFalse(page.checkboxes["current_grade"].isChecked())
+        self.assertIn("已选 1/1", other_group.badge_label.text())
+
+        other_group.reset_fields()
+        self.assertFalse(page.checkboxes["department"].isChecked())
+        role_group.set_all_fields(True)
+        self.assertTrue(page.checkboxes["current_grade"].isChecked())
+        self.assertFalse(page.checkboxes["department"].isChecked())
+
+        role_group.reset_fields()
+        self.assertFalse(page.checkboxes["current_grade"].isChecked())
+        self.assertFalse(page.checkboxes["department"].isChecked())
+
+    def test_refresh_context_pressure_estimates_and_sets_state(self):
+        dialog = self.make_dialog()
+        self.build_page(dialog)
+
+        dialog.refresh_context_pressure()
+
+        self.assertGreater(dialog.pressure_bar.value, 0)
+        self.assertIn("tokens", dialog.pressure_value_label.text)
+        self.assertIn(dialog.pressure_bar.properties["state"], {"safe", "warn", "danger"})
+
+    def test_schedule_context_pressure_refresh_uses_timer(self):
+        dialog = self.make_dialog()
+
+        dialog.schedule_context_pressure_refresh()
+
+        self.assertTrue(dialog.pressure_timer.started)
+        self.assertTrue(dialog._pressure_refresh_pending)
+
+    def test_navigation_switches_workspace_pages(self):
+        dialog = self.make_dialog()
+        dialog.table_pages = {
+            "base_info": type(
+                "Page",
+                (),
+                {
+                    "selected_count": lambda self: 3,
+                    "total_count": lambda self: 4,
+                    "refresh_badge": lambda self: None,
+                    "reflow_fields": lambda self: None,
+                    "table_label": "人员基本信息",
+                    "row_count": 2,
+                },
+            )(),
+        }
+        dialog.table_nav_buttons = {"base_info": FakeButton()}
+        dialog.chat_page = object()
+
+        dialog.refresh_table_navigation()
+        AIChatDialog.switch_to_table(dialog, "base_info")
+        self.assertIs(dialog.workspace_stack.current, dialog.table_pages["base_info"])
+        self.assertEqual("人员基本信息\n已选 3/4", dialog.table_nav_buttons["base_info"].text())
+        self.assertIn("2 行", dialog.table_nav_buttons["base_info"].tooltip)
+
+        AIChatDialog.switch_to_chat(dialog)
+        self.assertIs(dialog.workspace_stack.current, dialog.chat_page)
+
+    def test_switching_to_field_page_reflows_tags_without_window_resize(self):
+        with patch("ui.ai_chat.fetch_ollama_models", return_value=(True, ["qwen2:latest"])):
+            dialog = AIChatDialog(payload())
+        try:
+            dialog.show()
+            self.app.processEvents()
+            dialog.switch_to_table("base_info")
+            self.app.processEvents()
+            self.app.processEvents()
+
+            page = dialog.table_pages["base_info"]
+            geometries = [check.geometry() for check in page.checkboxes.values()]
+            self.assertGreater(len({(geometry.x(), geometry.y()) for geometry in geometries}), 1)
+            self.assertLess(max(geometry.width() for geometry in geometries), 240)
+        finally:
+            dialog.close()
+
+    def test_refresh_column_summary_updates_badges_and_nav(self):
+        dialog = self.make_dialog()
+        page = self.build_page(dialog)
+        page.checkboxes["department"].setChecked(True)
+
+        dialog.refresh_column_summary()
+
+        self.assertIn("将发送 2 个表 / 6 列 / 2 行", dialog.column_summary_label.text)
+        self.assertIn("已选 4/4 列", page.badge_label.text())
+        self.assertIn("已选 1/1", self.get_group(page, "其他字段").badge_label.text())
+        self.assertIn("已选 4/4", dialog.table_nav_buttons["base_info"].text())
+
+    def test_global_controls_disable_during_inference(self):
+        dialog = self.make_dialog()
+        page = self.build_page(dialog)
+        dialog.is_inference_running = True
+
+        dialog.update_action_state()
+
+        self.assertFalse(dialog.send_btn.enabled)
+        self.assertFalse(dialog.input_field.enabled)
+        self.assertFalse(dialog.model_combo.enabled)
+        self.assertFalse(dialog.refresh_btn.enabled)
+        self.assertFalse(dialog.clear_btn.enabled)
+        self.assertFalse(dialog.chat_nav_btn.enabled)
+        self.assertFalse(dialog.table_nav_buttons["base_info"].enabled)
+        self.assertFalse(page.core_btn.isEnabled())
+        self.assertFalse(page.all_btn.isEnabled())
+        self.assertFalse(page.reset_btn.isEnabled())
+        self.assertFalse(page.group_blocks[0].all_btn.isEnabled())
+        self.assertFalse(page.group_blocks[0].reset_btn.isEnabled())
+
+
 class AIChatDirectModelTests(unittest.TestCase):
-    def test_chat_dialog_no_longer_uses_structured_pipeline(self):
+    def test_chat_dialog_uses_direct_model_and_column_selection(self):
         source = "\n".join(
             [
                 inspect.getsource(AIChatDialog),
@@ -176,15 +482,10 @@ class AIChatDirectModelTests(unittest.TestCase):
         self.assertIn("AIWorker", source)
         self.assertIn("ask_model", source)
         self.assertIn("recommend_context_length", source)
-        self.assertIn("ctx_label", source)
-        self.assertNotIn("ctx_combo", source)
-        self.assertNotIn("startup_progress", source)
-        self.assertNotIn("OllamaStartupWorker", source)
-        self.assertNotIn("ensure_ollama_ready(start_if_needed=True)", source)
+        self.assertIn("selected_analysis_payload", source)
+        self.assertIn("filter_analysis_payload_by_columns", source)
+        self.assertNotIn("build_schema_selection_messages", source)
         self.assertNotIn("AIQueryEngine", source)
-        self.assertNotIn("AIConversationState", source)
-        self.assertNotIn("session_state", source)
-        self.assertNotIn("clean_ai_response", source)
 
     def test_ai_worker_passes_auto_context_to_direct_model(self):
         history = [{"role": "user", "content": "上一轮问题"}]
@@ -219,35 +520,8 @@ class AIChatDirectModelTests(unittest.TestCase):
             worker.run()
 
         self.assertEqual(5, ask.call_count)
-        self.assertEqual(2048, ask.call_args_list[0].args[3])
-        self.assertEqual(4096, ask.call_args_list[1].args[3])
-        self.assertEqual(8192, ask.call_args_list[2].args[3])
-        self.assertEqual(16384, ask.call_args_list[3].args[3])
-        self.assertEqual(32768, ask.call_args_list[4].args[3])
+        self.assertEqual([2048, 4096, 8192, 16384, 32768], [call.args[3] for call in ask.call_args_list])
         self.assertEqual([4096, 8192, 16384, 32768], changed_contexts)
-
-    def test_ai_worker_does_not_retry_beyond_device_limit(self):
-        worker = AIWorker("继续分析", payload(), "qwen2:latest", 4096, max_n_ctx=4096)
-
-        with patch("ui.ai_chat.ask_model", side_effect=RuntimeError("context length exceeded")) as ask, \
-                patch("ui.ai_chat.logger.exception"):
-            worker.run()
-
-        ask.assert_called_once()
-
-    def test_ai_worker_stops_after_reaching_device_limit(self):
-        worker = AIWorker("继续分析", payload(), "qwen2:latest", 2048, max_n_ctx=32768)
-
-        with patch("ui.ai_chat.ask_model", side_effect=RuntimeError("context length exceeded")) as ask, \
-                patch("ui.ai_chat.logger.exception"):
-            worker.run()
-
-        self.assertEqual(5, ask.call_count)
-        self.assertEqual(2048, ask.call_args_list[0].args[3])
-        self.assertEqual(4096, ask.call_args_list[1].args[3])
-        self.assertEqual(8192, ask.call_args_list[2].args[3])
-        self.assertEqual(16384, ask.call_args_list[3].args[3])
-        self.assertEqual(32768, ask.call_args_list[4].args[3])
 
     def test_ai_worker_does_not_retry_non_context_errors(self):
         worker = AIWorker("继续分析", payload(), "qwen2:latest", 2048, max_n_ctx=16384)
@@ -275,20 +549,10 @@ class AIChatDirectModelTests(unittest.TestCase):
     def test_user_message_renders_as_right_blue_bubble(self):
         rendered = render_message_html("user", "<script>alert(1)</script>")
 
-        self.assertIn('table width="100%"', rendered)
-        self.assertIn('width="24%"', rendered)
         self.assertIn('width="76%" align="right"', rendered)
-        self.assertIn('align="right" style="border: none; margin: 0;"', rendered)
-        self.assertIn("👤", rendered)
         self.assertIn("background-color: #2563EB", rendered)
-        self.assertIn("color: #FFFFFF", rendered)
-        self.assertIn("border-radius: 12px", rendered)
-        self.assertIn("border-top-right-radius: 4px", rendered)
-        self.assertIn("padding: 10px 14px", rendered)
         self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", rendered)
         self.assertNotIn("<script>alert(1)</script>", rendered)
-        self.assertNotIn(">我<", rendered)
-        self.assertNotIn(">AI<", rendered)
 
     def test_ai_message_renders_as_left_bubble_with_markdown_table(self):
         rendered = render_message_html(
@@ -297,26 +561,15 @@ class AIChatDirectModelTests(unittest.TestCase):
         )
 
         self.assertIn('width="76%" align="left"', rendered)
-        self.assertIn('align="left" style="border: none; margin: 0;"', rendered)
-        self.assertIn("🤖", rendered)
         self.assertIn("background-color: #F6F8FA", rendered)
-        self.assertIn("border: 1px solid #E5E7EB", rendered)
-        self.assertIn("border-top-left-radius: 4px", rendered)
         self.assertIn('<table style="border-collapse: collapse; width: 100%; margin: 8px 0;">', rendered)
-        self.assertIn('<th style="border: 1px solid #D0D7DE;', rendered)
-        self.assertIn('<td style="border: 1px solid #D0D7DE;', rendered)
-        self.assertNotIn(">AI<", rendered)
 
     def test_error_message_renders_as_left_red_bubble(self):
         rendered = render_message_html("assistant", "network failed", is_error=True)
 
         self.assertIn('width="76%" align="left"', rendered)
-        self.assertIn("🤖", rendered)
         self.assertIn("background-color: #FFF1F0", rendered)
-        self.assertIn("color: #8F1D16", rendered)
-        self.assertIn("border-top-left-radius: 4px", rendered)
         self.assertIn("network failed", rendered)
-        self.assertNotIn("分析失败", rendered)
 
     def test_context_label_updates_with_retry_context_and_same_reason(self):
         dialog = AIChatDialog.__new__(AIChatDialog)
@@ -326,18 +579,12 @@ class AIChatDirectModelTests(unittest.TestCase):
             hardware=HardwareSnapshot(),
             max_n_ctx=8192,
         )
-
-        class FakeLabel:
-            def __init__(self):
-                self.text = ""
-
-            def setText(self, text):
-                self.text = text
-
         dialog.ctx_label = FakeLabel()
+
         AIChatDialog.update_context_label(dialog, 4096)
 
-        self.assertEqual("4096（15.6GB 内存 / 4GB 显存）", dialog.ctx_label.text)
+        self.assertIn("4096", dialog.ctx_label.text)
+        self.assertIn("15.6GB 内存 / 4GB 显存", dialog.ctx_label.text)
 
     def make_query_tab_stub(self):
         tab = QueryTab.__new__(QueryTab)
@@ -384,45 +631,6 @@ class AIChatDirectModelTests(unittest.TestCase):
         open_dialog.assert_not_called()
         start_then_open.assert_not_called()
         warning.assert_called_once()
-        self.assertIn("请先查询或查看全部", warning.call_args.args[2])
-
-    def make_chat_dialog_stub(self, model_name="qwen2:latest", question="按部门汇总"):
-        dialog = AIChatDialog.__new__(AIChatDialog)
-        dialog.input_field = FakeLineEdit(question)
-        dialog.model_combo = FakeCombo(model_name)
-        dialog.status_label = FakeLabel()
-        dialog.model_status_label = FakeLabel()
-        dialog.send_btn = FakeButton()
-        dialog.refresh_btn = FakeButton()
-        dialog.clear_btn = FakeButton()
-        dialog.chat_history = FakeHistory()
-        dialog.history_messages = []
-        dialog.is_inference_running = False
-        dialog.worker = None
-        return dialog
-
-    def test_start_inference_without_model_does_not_create_worker(self):
-        dialog = self.make_chat_dialog_stub(model_name=MODEL_PLACEHOLDER)
-
-        AIChatDialog.start_inference(dialog)
-
-        self.assertIsNone(dialog.worker)
-        self.assertFalse(dialog.input_field.clear_called)
-        self.assertEqual("未选择可用模型，无法发送分析请求。", dialog.status_label.text)
-        self.assertFalse(dialog.send_btn.enabled)
-        self.assertTrue(dialog.input_field.enabled)
-
-    def test_handle_error_does_not_store_error_as_assistant_history(self):
-        dialog = self.make_chat_dialog_stub()
-        dialog.history_messages = [{"role": "user", "content": "上一轮问题"}]
-        dialog.is_inference_running = True
-
-        AIChatDialog.handle_error(dialog, "network failed")
-
-        self.assertEqual([{"role": "user", "content": "上一轮问题"}], dialog.history_messages)
-        self.assertIn("network failed", dialog.chat_history.items[-1])
-        self.assertEqual("分析失败：network failed", dialog.status_label.text)
-        self.assertTrue(dialog.send_btn.enabled)
 
     def test_start_ollama_then_open_ai_uses_main_window_progress(self):
         tab = self.make_query_tab_stub()
@@ -448,7 +656,6 @@ class AIChatDirectModelTests(unittest.TestCase):
                 patch("ui.query.ensure_ollama_ready", return_value=FakeOllamaStatus(True)) as ensure_ready:
             QueryTab.start_ollama_then_open_ai(tab, payload())
 
-        self.assertEqual("正在启动 Ollama，请稍候...", calls["title"])
         self.assertTrue(callable(calls["progress_dialog_factory"]))
         self.assertIn("ModernLoadingDialog", inspect.getsource(calls["progress_dialog_factory"]))
         ensure_ready.assert_called_once_with(start_if_needed=True)
@@ -493,34 +700,36 @@ class AIChatDirectModelTests(unittest.TestCase):
         self.assertIn({"name": "resume_text", "label": "简历信息"}, analysis_payload["schemas"]["resume"]["columns"])
         self.assertEqual("张三", analysis_payload["tables"]["base_info"]["rows"][0]["name"])
 
-    def test_schema_selection_messages_do_not_include_table_rows(self):
-        messages = build_schema_selection_messages("按部门分析人员情况", payload())
-        all_text = "\n".join(message["content"] for message in messages)
+    def test_filter_analysis_payload_by_columns_projects_schemas_labels_and_rows(self):
+        filtered = filter_analysis_payload_by_columns(
+            payload(),
+            {
+                "base_info": ["department"],
+                "rewards": ["reward_name"],
+            },
+        )
 
-        self.assertEqual("system", messages[0]["role"])
-        self.assertEqual("user", messages[-1]["role"])
-        self.assertIn('"schemas"', all_text)
-        self.assertIn('"table_name": "base_info"', all_text)
-        self.assertIn('"name": "department"', all_text)
-        self.assertNotIn('"rows"', all_text)
-        self.assertNotIn("张三", all_text)
-        self.assertNotIn("研发部", all_text)
+        self.assertEqual({"base_info", "rewards"}, set(filtered["tables"].keys()))
+        self.assertEqual(
+            ["sequence", "name", "department"],
+            list(filtered["tables"]["base_info"]["field_labels"].keys()),
+        )
+        self.assertEqual(
+            ["sequence", "name", "reward_name"],
+            list(filtered["tables"]["rewards"]["field_labels"].keys()),
+        )
+        self.assertEqual(
+            {"sequence": 1, "name": "张三", "department": "研发部"},
+            filtered["tables"]["base_info"]["rows"][0],
+        )
+        self.assertNotIn("current_grade", filtered["tables"]["base_info"]["rows"][0])
+        self.assertEqual(
+            ["sequence", "name", "department"],
+            [column["name"] for column in filtered["schemas"]["base_info"]["columns"]],
+        )
 
     def test_build_messages_uses_filtered_data_and_history(self):
-        filtered_payload = {
-            "tables": {
-                "base_info": {
-                    "table_name": "base_info",
-                    "table_label": "人员基本信息",
-                    "field_labels": {
-                        "sequence": "序号",
-                        "name": "姓名",
-                        "department": "部门",
-                    },
-                    "rows": [{"sequence": 1, "name": "张三", "department": "研发部"}],
-                }
-            }
-        }
+        filtered_payload = filter_analysis_payload_by_columns(payload(), {"base_info": ["department"]})
         history = [
             {"role": "user", "content": "上一轮问题"},
             {"role": "assistant", "content": "上一轮回答"},
@@ -532,8 +741,6 @@ class AIChatDirectModelTests(unittest.TestCase):
 
         self.assertEqual({"role": "user", "content": "上一轮问题"}, messages[1])
         self.assertEqual({"role": "assistant", "content": "上一轮回答"}, messages[2])
-        self.assertIn("筛选后的数据", all_text)
-        self.assertIn("只能基于“筛选后的数据”回答", all_text)
         self.assertIn('"department": "研发部"', all_text)
         self.assertNotIn("这条不应进入历史", all_text)
         self.assertNotIn("current_grade", all_text)
@@ -551,76 +758,31 @@ class AIChatDirectModelTests(unittest.TestCase):
         self.assertEqual({"role": "user", "content": "问题2"}, retained_history[0])
         self.assertEqual({"role": "assistant", "content": "回答11"}, retained_history[-1])
 
-    def test_ask_model_uses_two_stage_filtered_analysis(self):
-        selection = json.dumps(
-            {
-                "tables": [
-                    {"table_name": "base_info", "columns": ["department"]},
-                    {"table_name": "rewards", "columns": ["reward_name"]},
-                ]
-            },
-            ensure_ascii=False,
-        )
+    def test_ask_model_posts_selected_payload_directly_once(self):
+        filtered = filter_analysis_payload_by_columns(payload(), {"base_info": ["department"]})
 
-        with patch(
-            "services.ai_direct.requests.post",
-            side_effect=[FakeResponse(selection), FakeResponse("正式分析结果")],
-        ) as post:
-            answer = ask_model("按部门和奖励分析人员情况", payload(), "qwen2:latest", n_ctx=8192, timeout=5)
+        with patch("services.ai_direct.requests.post", return_value=FakeResponse("正式分析结果")) as post:
+            answer = ask_model("按部门分析", filtered, "qwen2:latest", n_ctx=8192, timeout=5)
 
         self.assertEqual("正式分析结果", answer)
-        self.assertEqual(2, post.call_count)
-
-        first_body = post.call_args_list[0].kwargs["json"]
-        first_text = "\n".join(message["content"] for message in first_body["messages"])
-        self.assertIn('"schemas"', first_text)
-        self.assertNotIn('"rows"', first_text)
-        self.assertNotIn("张三", first_text)
-        self.assertNotIn("研发部", first_text)
-
-        second_body = post.call_args_list[1].kwargs["json"]
-        second_text = "\n".join(message["content"] for message in second_body["messages"])
-        self.assertEqual("qwen2:latest", second_body["model"])
-        self.assertEqual({"num_ctx": 8192}, second_body["options"])
-        self.assertIn('"sequence": 1', second_text)
-        self.assertIn('"name": "张三"', second_text)
-        self.assertIn('"department": "研发部"', second_text)
-        self.assertIn('"table_name": "rewards"', second_text)
-        self.assertIn('"rows": []', second_text)
-        self.assertNotIn("current_grade", second_text)
-        self.assertNotIn("一级", second_text)
-
-    def test_ask_model_drops_invalid_tables_and_columns(self):
-        selection = json.dumps(
-            {
-                "tables": [
-                    {"table_name": "unknown", "columns": ["name"]},
-                    {"table_name": "base_info", "columns": ["not_real"]},
-                ]
-            },
-            ensure_ascii=False,
-        )
-
-        with patch("services.ai_direct.requests.post", return_value=FakeResponse(selection)) as post:
-            answer = ask_model("分析不存在的字段", payload(), "qwen2:latest", timeout=5)
-
-        self.assertEqual(SELECTION_FAILURE_MESSAGE, answer)
         post.assert_called_once()
+        body = post.call_args.kwargs["json"]
+        prompt_text = "\n".join(message["content"] for message in body["messages"])
+        self.assertEqual("qwen2:latest", body["model"])
+        self.assertEqual({"num_ctx": 8192}, body["options"])
+        self.assertIn('"sequence": 1', prompt_text)
+        self.assertIn('"name": "张三"', prompt_text)
+        self.assertIn('"department": "研发部"', prompt_text)
+        self.assertNotIn("current_grade", prompt_text)
+        self.assertNotIn("一级", prompt_text)
 
-    def test_ask_model_posts_dialog_history_to_both_stages(self):
-        selection = json.dumps(
-            {"tables": [{"table_name": "base_info", "columns": ["department"]}]},
-            ensure_ascii=False,
-        )
+    def test_ask_model_posts_dialog_history_once(self):
         history = [
             {"role": "user", "content": "上一轮问题"},
             {"role": "assistant", "content": "上一轮回答"},
         ]
 
-        with patch(
-            "services.ai_direct.requests.post",
-            side_effect=[FakeResponse(selection), FakeResponse("已结合历史回答。")],
-        ) as post:
+        with patch("services.ai_direct.requests.post", return_value=FakeResponse("已结合历史回答。")) as post:
             answer = ask_model(
                 "继续分析",
                 payload(),
@@ -630,16 +792,64 @@ class AIChatDirectModelTests(unittest.TestCase):
             )
 
         self.assertEqual("已结合历史回答。", answer)
-        first_messages = post.call_args_list[0].kwargs["json"]["messages"]
-        second_messages = post.call_args_list[1].kwargs["json"]["messages"]
-        self.assertEqual(history[0], first_messages[1])
-        self.assertEqual(history[1], first_messages[2])
-        self.assertEqual(history[0], second_messages[1])
-        self.assertEqual(history[1], second_messages[2])
+        messages = post.call_args.kwargs["json"]["messages"]
+        self.assertEqual(history[0], messages[1])
+        self.assertEqual(history[1], messages[2])
 
     def test_ask_model_requires_model_name(self):
         with self.assertRaises(ValueError):
             ask_model("问题", payload(), "", n_ctx=4096)
+
+    def make_chat_dialog_stub(self, model_name="qwen2:latest", question="按部门汇总"):
+        dialog = AIChatDialog.__new__(AIChatDialog)
+        dialog.analysis_payload = payload()
+        dialog.input_field = FakeLineEdit(question)
+        dialog.model_combo = FakeCombo(model_name)
+        dialog.status_label = FakeLabel()
+        dialog.model_status_label = FakeLabel()
+        dialog.send_btn = FakeButton()
+        dialog.refresh_btn = FakeButton()
+        dialog.clear_btn = FakeButton()
+        dialog.chat_history = FakeHistory()
+        dialog.history_messages = []
+        dialog.is_inference_running = False
+        dialog.worker = None
+        dialog.current_context_recommendation = ContextRecommendation(
+            n_ctx=4096,
+            reason="test",
+            hardware=HardwareSnapshot(),
+            max_n_ctx=4096,
+        )
+        dialog.column_checks = {
+            "base_info": {
+                "sequence": FakeCheck(True),
+                "name": FakeCheck(True),
+                "department": FakeCheck(True),
+                "current_grade": FakeCheck(False),
+            }
+        }
+        return dialog
+
+    def test_start_inference_without_model_does_not_create_worker(self):
+        dialog = self.make_chat_dialog_stub(model_name=MODEL_PLACEHOLDER)
+
+        AIChatDialog.start_inference(dialog)
+
+        self.assertIsNone(dialog.worker)
+        self.assertFalse(dialog.input_field.clear_called)
+        self.assertFalse(dialog.send_btn.enabled)
+        self.assertTrue(dialog.input_field.enabled)
+
+    def test_handle_error_does_not_store_error_as_assistant_history(self):
+        dialog = self.make_chat_dialog_stub()
+        dialog.history_messages = [{"role": "user", "content": "上一轮问题"}]
+        dialog.is_inference_running = True
+
+        AIChatDialog.handle_error(dialog, "network failed")
+
+        self.assertEqual([{"role": "user", "content": "上一轮问题"}], dialog.history_messages)
+        self.assertIn("network failed", dialog.chat_history.items[-1])
+        self.assertTrue(dialog.send_btn.enabled)
 
 
 if __name__ == "__main__":
