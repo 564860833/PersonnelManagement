@@ -1,12 +1,13 @@
 import os
 import unittest
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt5.QtWidgets import QApplication, QHeaderView
 
 from metadata.constants import TABLE_LABELS
-from ui.user_management import CenteredIconDelegate, UserManagementDialog
+from ui.user_management import AddUserDialog, CenteredIconDelegate, UserManagementDialog
 
 
 class FakeUserDb:
@@ -18,6 +19,69 @@ class FakeUserDb:
 
     def get_all_users(self):
         return ["analyst"]
+
+
+class FakeAddUserDb:
+    def __init__(self, add_success=True):
+        self.add_success = add_success
+        self.add_user_calls = []
+        self.get_password_calls = []
+        self.set_permission_calls = []
+
+    def is_reserved_admin_username(self, username):
+        return isinstance(username, str) and username.casefold() == "admin"
+
+    def get_password(self, username):
+        self.get_password_calls.append(username)
+        return None
+
+    def add_user(self, username, password):
+        self.add_user_calls.append((username, password))
+        return self.add_success
+
+    def set_user_permissions(self, username, permissions):
+        self.set_permission_calls.append((username, permissions))
+
+
+class AddUserDialogTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def make_dialog(self, db):
+        dialog = AddUserDialog(db)
+        self.addCleanup(dialog.deleteLater)
+        return dialog
+
+    def fill_required_fields(self, dialog, username="analyst"):
+        dialog.username_input.setText(username)
+        dialog.password_input.setText("pw")
+        dialog.confirm_input.setText("pw")
+
+    def test_reserved_admin_variant_is_rejected_before_user_write(self):
+        db = FakeAddUserDb()
+        dialog = self.make_dialog(db)
+        self.fill_required_fields(dialog, "Admin")
+
+        with patch("ui.user_management.QMessageBox.warning") as warning:
+            dialog.on_ok()
+
+        warning.assert_called_once()
+        self.assertEqual([], db.get_password_calls)
+        self.assertEqual([], db.add_user_calls)
+        self.assertEqual([], db.set_permission_calls)
+
+    def test_add_user_failure_does_not_write_permissions(self):
+        db = FakeAddUserDb(add_success=False)
+        dialog = self.make_dialog(db)
+        self.fill_required_fields(dialog)
+
+        with patch("ui.user_management.QMessageBox.critical") as critical:
+            dialog.on_ok()
+
+        critical.assert_called_once()
+        self.assertEqual([("analyst", "pw")], db.add_user_calls)
+        self.assertEqual([], db.set_permission_calls)
 
 
 class UserManagementDialogTests(unittest.TestCase):

@@ -691,7 +691,11 @@ class Database:
     def change_password(self, username: str, new_password: str) -> bool:
         try:
             cursor = self.conn.cursor()
-            if self.get_password(username) is None:
+            existing_password = self.get_password(username)
+            if existing_password is None:
+                if self.is_reserved_admin_username(username) and not self.is_admin(username):
+                    logger.warning(f"拒绝创建保留的管理员用户名变体: {username}")
+                    return False
                 cursor.execute("INSERT INTO users (username, password) VALUES (?, ?)", (username, new_password))
             else:
                 cursor.execute("UPDATE users SET password=? WHERE username=?", (new_password, username))
@@ -847,6 +851,10 @@ class Database:
         self.close()
 
     def add_user(self, username: str, password: str) -> bool:
+        if self.is_reserved_admin_username(username):
+            logger.warning(f"拒绝新增保留的管理员用户名: {username}")
+            return False
+
         try:
             cursor = self.conn.cursor()
             cursor.execute("INSERT INTO users (username, password) VALUES (?, ?)", (username, password))
@@ -894,7 +902,10 @@ class Database:
         return DEFAULT_PERMISSIONS.copy()
 
     def is_admin(self, username: str) -> bool:
-        return username.lower() == "admin"
+        return username == "admin"
+
+    def is_reserved_admin_username(self, username: str) -> bool:
+        return isinstance(username, str) and username.casefold() == "admin"
 
     def get_all_users(self):
         cursor = self.conn.cursor()

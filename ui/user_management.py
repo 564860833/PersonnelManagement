@@ -154,6 +154,10 @@ class AddUserDialog(QDialog):
             QMessageBox.warning(self, "输入错误", "用户名不能为空")
             return
 
+        if self.db.is_reserved_admin_username(username):
+            QMessageBox.warning(self, "用户名不可用", "admin 是系统保留管理员账号，请使用其他用户名")
+            return
+
         if not password:
             QMessageBox.warning(self, "输入错误", "密码不能为空")
             return
@@ -169,7 +173,9 @@ class AddUserDialog(QDialog):
 
         # 添加用户到数据库
         try:
-            self.db.add_user(username, password)
+            if not self.db.add_user(username, password):
+                QMessageBox.critical(self, "添加失败", "用户添加失败，请使用其他用户名后重试")
+                return
 
             # 设置权限
             permissions = {

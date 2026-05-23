@@ -142,7 +142,7 @@ def main():
             permissions = db.get_user_permissions(username)
 
             # 管理员自动拥有所有权限
-            if username.lower() == 'admin':
+            if db.is_admin(username):
                 permissions = ADMIN_PERMISSIONS.copy()
                 logger.info(f"管理员账号 {username} 获得所有权限")
 
