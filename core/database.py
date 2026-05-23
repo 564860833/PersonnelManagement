@@ -449,17 +449,6 @@ class Database:
             self.conn.rollback()
             return False
 
-    def backup_database(self, backup_path: str) -> bool:
-        """备份数据库到指定路径"""
-        try:
-            with sqlite3.connect(backup_path) as backup_conn:
-                self.conn.backup(backup_conn)
-            logger.info(f"数据库已备份到: {backup_path}")
-            return True
-        except sqlite3.Error as e:
-            logger.error(f"数据库备份失败: {e}")
-            return False
-
     def get_all_data(self, table_name: str) -> List[Dict]:
         """获取指定表的所有数据"""
         validate_table_name(table_name)
@@ -470,13 +459,6 @@ class Database:
         except sqlite3.Error as e:
             logger.error(f"获取表 {table_name} 数据失败: {e}")
             return []
-
-    def get_table_row_count(self, table_name: str) -> int:
-        """获取指定业务表的数据行数。"""
-        validate_table_name(table_name)
-        cursor = self.conn.cursor()
-        cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
-        return cursor.fetchone()[0]
 
     def _extract_person_key(self, record: Dict, normalize_columns: bool = False) -> Optional[tuple]:
         """提取记录的序号+姓名键。"""

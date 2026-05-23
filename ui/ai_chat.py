@@ -320,10 +320,6 @@ class AIChatDialog(QDialog):
             self.worker.stop()
         event.accept()
 
-    def get_local_models(self):
-        available, models = fetch_ollama_models(timeout=3)
-        return models if available else []
-
     def refresh_models(self):
         self.model_combo.blockSignals(True)
         self.model_combo.clear()

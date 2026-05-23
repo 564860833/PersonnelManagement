@@ -19,7 +19,6 @@ from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QApplication, QMessageBox
 from config import config
 from core.database import Database
-from services.ollama_manager import APP_OLLAMA_HOST, ensure_ollama_ready
 from ui.login import LoginDialog
 from ui.main_window import MainWindow
 from metadata.constants import ADMIN_PERMISSIONS
@@ -210,27 +209,6 @@ def check_database_connection(db) -> bool:
     except Exception as e:
         logger.error(f"数据库连接检查失败: {str(e)}")
         return False
-
-
-def initialize_ollama_for_local_models():
-    """让 Ollama 优先使用程序目录下的 models，并在需要时自动启动服务。"""
-    try:
-        status = ensure_ollama_ready(start_if_needed=True)
-        logger.info(status.message)
-        if status.local_models_dir:
-            logger.info("程序本地模型目录: %s", status.local_models_dir)
-        if status.local_model_names:
-            logger.info("程序本地模型: %s", ", ".join(status.local_model_names))
-        if status.warning and status.local_model_names:
-            QMessageBox.warning(
-                None,
-                "Ollama 模型提示",
-                status.warning + "\n\n"
-                f"本程序只连接专用本机端口 {APP_OLLAMA_HOST}，不会关闭或重启系统中已有的 Ollama。"
-            )
-    except Exception as e:
-        logger.exception("Ollama 本地模型初始化失败")
-        QMessageBox.warning(None, "Ollama 初始化提示", f"Ollama 本地模型初始化失败：\n{e}")
 
 
 def show_critical_error(title, message):

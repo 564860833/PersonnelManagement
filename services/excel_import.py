@@ -250,22 +250,6 @@ def _prepare_import_records_with_metadata(
         return False, f"导入{TABLE_LABELS[table_name]}失败: {e}", [], []
 
 
-def prepare_import_records(
-        file_path: str,
-        db: Database,
-        table_name: str,
-        persist_assessment_years: bool = False
-) -> tuple:
-    """读取并转换 Excel 记录，必要时保存年度考核配置。"""
-    success, message, records, _ = _prepare_import_records_with_metadata(
-        file_path,
-        db,
-        table_name,
-        persist_assessment_years
-    )
-    return success, message, records
-
-
 def prepare_import_preview(file_path: str, db_path: str, table_name: str) -> dict:
     """后台预读 Excel，并返回重复记录信息。"""
     db = Database(db_path)
@@ -331,21 +315,3 @@ def import_prepared_records(
     finally:
         db.close()
 
-
-def import_specific_table(file_path: str, db: Database, table_name: str) -> (bool, str):
-    """将Excel文件导入到指定数据库表，支持合并单元格处理"""
-    success, message, records, _ = _prepare_import_records_with_metadata(
-        file_path,
-        db,
-        table_name,
-        persist_assessment_years=True
-    )
-    if not success:
-        return False, message
-
-    try:
-        db.import_excel_data(table_name, records)
-        return True, f"成功导入{TABLE_LABELS[table_name]} {len(records)} 条记录"
-    except Exception as e:
-        logger.error(f"导入{table_name}失败: {e}", exc_info=True)
-        return False, f"导入{TABLE_LABELS[table_name]}失败: {e}"

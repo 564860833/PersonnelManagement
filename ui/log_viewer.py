@@ -1,11 +1,10 @@
 import os
-import time
 import chardet
 import logging
 from PyQt5.QtWidgets import (QDialog, QTextEdit, QPushButton, QVBoxLayout,
                              QHBoxLayout, QLabel, QFileDialog, QApplication,
-                             QComboBox, QMainWindow)
-from PyQt5.QtCore import Qt, QTimer
+                             QComboBox)
+from PyQt5.QtCore import QTimer
 from PyQt5.QtGui import QFont, QTextCursor
 from ui.styles import DIALOG_BASE_STYLE, DIALOG_BUTTON_STYLE
 

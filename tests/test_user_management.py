@@ -1,5 +1,4 @@
 import os
-import sqlite3
 import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -13,16 +12,12 @@ from ui.user_management import CenteredIconDelegate, UserManagementDialog
 class FakeUserDb:
     def __init__(self, permissions):
         self.permissions = permissions
-        self.conn = sqlite3.connect(":memory:")
-        self.conn.execute("CREATE TABLE users (username TEXT)")
-        self.conn.executemany(
-            "INSERT INTO users (username) VALUES (?)",
-            [("admin",), ("analyst",)],
-        )
-        self.conn.commit()
 
     def get_user_permissions(self, username):
         return self.permissions[username]
+
+    def get_all_users(self):
+        return ["analyst"]
 
 
 class UserManagementDialogTests(unittest.TestCase):

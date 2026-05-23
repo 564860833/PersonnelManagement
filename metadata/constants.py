@@ -140,11 +140,3 @@ def get_table_field_items(table_name, assessment_years=None):
 
 def get_table_field_labels(table_name, assessment_years=None):
     return dict(get_table_field_items(table_name, assessment_years))
-
-
-def get_table_headers(table_name, assessment_years=None):
-    return [label for _, label in get_table_field_items(table_name, assessment_years)]
-
-
-def get_table_field_by_header(table_name, assessment_years=None):
-    return {label: field_name for field_name, label in get_table_field_items(table_name, assessment_years)}

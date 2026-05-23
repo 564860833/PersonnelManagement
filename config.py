@@ -1,7 +1,5 @@
 import os
 import logging
-import sys
-from pathlib import Path
 from PyQt5.QtGui import QFont
 from datetime import datetime
 from metadata.constants import TABLE_LABELS
@@ -28,8 +26,7 @@ class Config:
         self.LOG_LEVEL = logging.INFO
         self.LOG_FILE = self.get_log_path()
 
-        # 创建必要目录和日志文件
-        self.create_app_directories()
+        # 创建必要日志文件
         self.ensure_log_file_exists()
         self.configure_logging()
 
@@ -69,33 +66,6 @@ class Config:
                     f.write(f"{datetime.now()} - 日志文件创建\n")
             except Exception as e:
                 logger.error(f"无法创建日志文件: {e}")
-
-    def get_app_data_dir(self) -> str:
-        """获取应用程序数据存储目录"""
-        # 跨平台应用数据目录
-        if os.name == 'nt':  # Windows
-            app_data = os.getenv('APPDATA')
-            app_dir = os.path.join(app_data, self.APP_NAME)  # 直接使用APP_NAME
-        else:  # macOS/Linux
-            home_dir = os.path.expanduser('~')
-            app_dir = os.path.join(home_dir, '.config', self.APP_NAME)  # 直接使用APP_NAME
-
-        return app_dir
-
-    def create_app_directories(self):
-        """创建应用程序所需的目录结构"""
-        app_dir = self.get_app_data_dir()
-        for path in [app_dir, os.path.join(app_dir, 'backups')]:
-            Path(path).mkdir(parents=True, exist_ok=True)
-
-    def get_backup_dir(self) -> str:
-        """获取备份目录"""
-        return os.path.join(self.get_app_data_dir(), 'backups')
-
-    def get_backup_filename(self) -> str:
-        """生成自动备份文件名"""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        return f"backup_{timestamp}.db"
 
     def configure_logging(self):
         """配置日志系统，确保使用UTF-8编码"""

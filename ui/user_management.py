@@ -5,7 +5,6 @@ from PyQt5.QtWidgets import (QDialog, QLabel, QLineEdit, QPushButton, QVBoxLayou
 from PyQt5.QtCore import QLineF, QRect, QRectF, QSize, Qt
 from PyQt5.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 import logging
-import sqlite3
 from metadata.constants import TABLE_LABELS
 from ui.confirm_dialog import confirm_danger
 from ui.styles import DIALOG_BASE_STYLE, DIALOG_BUTTON_STYLE, RESULT_TABLE_STYLE
@@ -257,10 +256,7 @@ class UserManagementDialog(QDialog):
     def load_users(self):
         """从数据库加载所有用户（除了admin）"""
         try:
-            # 获取所有用户（排除admin）
-            cursor = self.db.conn.cursor()
-            cursor.execute("SELECT username FROM users WHERE username != 'admin'")
-            users = [row[0] for row in cursor.fetchall()]
+            users = self.db.get_all_users()
 
             self.user_table.setRowCount(len(users))
 
@@ -278,7 +274,7 @@ class UserManagementDialog(QDialog):
                     item = self.user_table.item(row, col)
                     item.setTextAlignment(Qt.AlignCenter)
 
-        except sqlite3.Error as e:
+        except Exception as e:
             logger.error(f"加载用户列表失败: {e}")
             QMessageBox.critical(self, "错误", f"加载用户列表失败: {e}")
 

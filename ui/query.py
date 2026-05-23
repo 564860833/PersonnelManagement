@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (
     QLineEdit, QPushButton, QTableView,
     QComboBox, QFrame, QGraphicsDropShadowEffect,
     QMessageBox, QHeaderView, QDialog,
-    QVBoxLayout, QCheckBox, QDialogButtonBox,
+    QCheckBox, QDialogButtonBox,
     QScrollArea, QAbstractItemView, QGridLayout, QSizePolicy, QStackedWidget
 )
 from PyQt5.QtCore import Qt, QSignalBlocker, pyqtSignal
@@ -1108,14 +1108,6 @@ class QueryTab(QWidget):
             logger.error(f"查询执行失败: {e}")
             QMessageBox.critical(self, "查询错误", f"执行查询时发生错误: {e}")
 
-    def get_full_field_mapping(self, table_name: str) -> dict:
-        """
-        获取指定表的所有字段映射（数据库字段名 -> 中文表头名）
-        用于确保 AI 能读取到所有列，且能理解列的含义
-        """
-        assessment_years = self.db.get_assessment_years() or []
-        return get_table_field_labels(table_name, assessment_years)
-
     def open_ai_chat(self):
         """
         启动 AI 分析对话框。
@@ -1214,10 +1206,6 @@ class QueryTab(QWidget):
         self.current_table_name = table_name
         self.current_page = 1
         self.display_current_page()
-
-    def get_table_name(self, table_name: str) -> str:
-        """获取表的中文名称"""
-        return get_table_label(table_name)
 
     def get_table_columns(self, table_name: str):
         """获取当前表的字段和表头。"""
