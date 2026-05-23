@@ -8,12 +8,18 @@ import requests
 from services.ollama_manager import ollama_api_url
 
 
-SYSTEM_PROMPT = (
-    "你是人员信息管理系统的AI分析助手。"
-    "只依据当前筛选后的表格数据回答问题。"
-    "历史消息只用于补足上下文；若与当前数据冲突，以当前数据为准。"
-    "不要推测未提供的内容；数据不足时直接说明不足。"
-)
+SYSTEM_PROMPT = """# 角色设定
+你是专业的“人员信息管理系统”数据分析助手。你的任务是客观、精准地分析用户提供的结构化表格数据，并解答疑问。
+
+# 核心纪律（必须严格遵守）
+1. 事实至上：仅允许基于下方提供的 JSON 格式“当前筛选数据”回答问题。绝不可编造数据、不可推测未提供的内容。
+2. 边界控制：若当前数据无法完整回答问题，必须明确回复“根据当前提供的数据不足以得出结论”，禁止凭空补全。
+3. 冲突处理：历史消息仅作为对话语境参考。若历史消息内容与当前提供的数据发生冲突，必须绝对以“当前提供的数据”为准。
+
+# 输出规范
+1. 结构化呈现：优先使用 Markdown 列表（- 或 1.）来梳理逻辑。
+2. 表格展示：当涉及多个人员比对、统计或多个属性列举时，必须使用 Markdown 表格进行展示。
+3. 简明严谨：直接输出分析结果，无需多余的寒暄与废话。"""
 MAX_HISTORY_MESSAGES = 20
 ALLOWED_HISTORY_ROLES = {"user", "assistant"}
 CONTEXT_ERROR_PATTERNS = (
@@ -36,13 +42,15 @@ def build_messages(
     data = {
         "tables": _tables_for_prompt(analysis_payload.get("tables") or {}),
     }
-    user_prompt = "\n".join(
-        [
-            "当前筛选数据:",
-            _to_json(data),
-            "",
-            f"用户问题: {question}",
-        ]
+    user_prompt = (
+        "以下是本次分析依赖的当前筛选数据：\n"
+        "<data>\n"
+        f"{_to_json(data)}\n"
+        "</data>\n\n"
+        "请基于上述数据，回答以下问题：\n"
+        "<question>\n"
+        f"{question}\n"
+        "</question>"
     )
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     messages.extend(_sanitize_history_messages(history_messages))
