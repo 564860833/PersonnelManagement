@@ -269,6 +269,34 @@ def prepare_import_preview(file_path: str, db_path: str, table_name: str) -> dic
                 "assessment_years": assessment_years,
             }
 
+        unresolved = []
+        if table_name in {"rewards", "family", "resume"}:
+            for index, record in enumerate(records, start=1):
+                normalized_record = {
+                    db.normalize_column_name(column_name): value
+                    for column_name, value in record.items()
+                }
+                try:
+                    db._resolve_person_id(normalized_record)
+                except ValueError as e:
+                    key = db._extract_person_key(normalized_record)
+                    sequence, name = key if key else ("", "")
+                    unresolved.append((index, sequence, name, str(e)))
+
+        if unresolved:
+            sample = "; ".join(
+                f"第 {index} 行 序号={sequence or '空'} 姓名={name or '空'}: {message}"
+                for index, sequence, name, message in unresolved[:5]
+            )
+            extra = f" 等 {len(unresolved)} 条" if len(unresolved) > 5 else ""
+            return {
+                "success": False,
+                "message": f"{TABLE_LABELS[table_name]}中存在无法关联到人员基本信息的记录{extra}: {sample}",
+                "records": records,
+                "duplicate_keys": [],
+                "assessment_years": assessment_years,
+            }
+
         duplicate_keys = db.find_duplicate_person_keys(table_name, records)
         return {
             "success": True,
@@ -291,7 +319,7 @@ def import_prepared_records(
     """将已解析的记录写入数据库，供后台线程调用。"""
     db = Database(db_path)
     try:
-        if overwrite and not db.clear_table_data(table_name):
+        if overwrite and table_name != 'base_info' and not db.clear_table_data(table_name):
             return {"success": False, "message": f"清空{TABLE_LABELS[table_name]}失败，请查看日志"}
 
         if table_name == 'base_info' and assessment_years:
@@ -304,7 +332,13 @@ def import_prepared_records(
             if not existing_years and not db.set_assessment_years(assessment_years):
                 return {"success": False, "message": "保存年度考核配置失败"}
 
-        db.import_excel_data(table_name, records)
+        if overwrite and table_name == 'base_info':
+            db.clear_assessment_years()
+            if assessment_years and not db.set_assessment_years(assessment_years):
+                return {"success": False, "message": "淇濆瓨骞村害鑰冩牳閰嶇疆澶辫触"}
+            db.replace_base_info_data(records)
+        else:
+            db.import_excel_data(table_name, records)
         return {
             "success": True,
             "message": f"成功导入{TABLE_LABELS[table_name]} {len(records)} 条记录",
@@ -314,4 +348,3 @@ def import_prepared_records(
         return {"success": False, "message": f"导入{TABLE_LABELS[table_name]}失败: {e}"}
     finally:
         db.close()
-

@@ -16,8 +16,9 @@ def export_table_data(data, file_path: str, table_name: str) -> int:
         raise ValueError("没有可导出的数据")
 
     df = pd.DataFrame(data)
-    if "id" in df.columns:
-        df = df.drop(columns=["id"])
+    internal_columns = [column for column in ("id", "person_id") if column in df.columns]
+    if internal_columns:
+        df = df.drop(columns=internal_columns)
 
     df.to_excel(file_path, index=False)
 

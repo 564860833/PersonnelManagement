@@ -1132,6 +1132,30 @@ class AIChatDirectModelTests(unittest.TestCase):
         self.assertIn({"name": "resume_text", "label": "简历信息"}, analysis_payload["schemas"]["resume"]["columns"])
         self.assertEqual("张三", analysis_payload["tables"]["base_info"]["rows"][0]["name"])
 
+    def test_build_ai_analysis_payload_hides_internal_ids(self):
+        results = {
+            "rewards": [
+                {
+                    "id": 1,
+                    "person_id": 2,
+                    "sequence": 1,
+                    "name": "寮犱笁",
+                    "reward_name": "浼樼",
+                }
+            ]
+        }
+        permissions = {
+            "base_info": False,
+            "rewards": True,
+            "family": False,
+            "resume": False,
+        }
+
+        analysis_payload = build_ai_analysis_payload(results, permissions)
+
+        row = analysis_payload["tables"]["rewards"]["rows"][0]
+        self.assertEqual({"sequence": 1, "name": "寮犱笁", "reward_name": "浼樼"}, row)
+
     def test_filter_analysis_payload_by_columns_projects_schemas_labels_and_rows(self):
         filtered = filter_analysis_payload_by_columns(
             payload(),

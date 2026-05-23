@@ -56,7 +56,15 @@ def build_ai_analysis_payload(results_dict: dict, permissions: dict, assessment_
 
     for table_name in allowed_tables:
         field_labels = get_table_field_labels(table_name, assessment_years or [])
-        rows = [dict(row) for row in (results_dict or {}).get(table_name, [])]
+        allowed_fields = set(field_labels.keys())
+        rows = [
+            {
+                field_name: value
+                for field_name, value in dict(row).items()
+                if field_name in allowed_fields
+            }
+            for row in (results_dict or {}).get(table_name, [])
+        ]
         payload["schemas"][table_name] = {
             "table_name": table_name,
             "table_label": get_table_label(table_name),
