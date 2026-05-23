@@ -111,11 +111,34 @@ def fetch_ollama_models(timeout: float = 3.0) -> Tuple[bool, List[str]]:
         response = requests.get(ollama_api_url("/api/tags"), timeout=timeout)
         response.raise_for_status()
         data = response.json()
-        models = [model["name"] for model in data.get("models", []) if model.get("name")]
+        models = _sorted_model_names(data.get("models", []))
         return True, models
     except Exception as e:
         logger.debug("获取 Ollama 模型列表失败: %s", e)
         return False, []
+
+
+def _sorted_model_names(models: List[dict]) -> List[str]:
+    indexed_models = []
+    for index, model in enumerate(models or []):
+        if not isinstance(model, dict):
+            continue
+        name = str(model.get("name") or "").strip()
+        if not name:
+            continue
+        size_value = _safe_model_size(model.get("size"))
+        indexed_models.append((size_value, name.lower(), index, name))
+
+    indexed_models.sort(key=lambda item: (item[0], item[1], item[2]))
+    return [item[3] for item in indexed_models]
+
+
+def _safe_model_size(value) -> int:
+    try:
+        size_value = int(value)
+    except (TypeError, ValueError):
+        return 2**63 - 1
+    return size_value if size_value >= 0 else 2**63 - 1
 
 
 def ollama_api_url(path: str) -> str:

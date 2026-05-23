@@ -12,6 +12,7 @@ from PyQt5.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QComboBox,
+    QApplication,
     QDialog,
     QFrame,
     QHBoxLayout,
@@ -163,6 +164,8 @@ CJK_TOKEN_WEIGHT = 1.8
 ASCII_TOKEN_WEIGHT = 0.3
 WHITESPACE_TOKEN_WEIGHT = 0.05
 MANUAL_CONTEXT_OPTIONS = (2048, 4096, 8192, 16384, 32768)
+AI_CHAT_WINDOW_WIDTH_RATIO = 0.68
+AI_CHAT_WINDOW_HEIGHT_RATIO = 0.70
 
 AI_CHAT_STYLE = """
 QSplitter::handle {
@@ -341,8 +344,8 @@ QFrame#aiCoreButtonGroup {
     border: none;
 }
 QPushButton#aiCoreSegmentLeft {
-    min-height: 34px;
-    max-height: 34px;
+    min-height: 32px;
+    max-height: 32px;
     padding: 4px 14px;
     border: 1px solid #C9D1D9;
     border-top-left-radius: 5px;
@@ -363,8 +366,8 @@ QPushButton#aiCoreSegmentLeft:disabled {
     color: #8C959F;
 }
 QToolButton#aiCoreSegmentRight {
-    min-height: 34px;
-    max-height: 34px;
+    min-height: 32px;
+    max-height: 32px;
     padding: 4px 12px;
     border: 1px solid #C9D1D9;
     border-left: none;
@@ -1367,13 +1370,13 @@ class FieldSelectionPage(QFrame):
 
         self.core_btn = QPushButton("核心字段")
         self.core_btn.setObjectName("aiCoreSegmentLeft")
-        self.core_btn.setFixedHeight(34)
+        self.core_btn.setFixedHeight(32)
         self.core_config_btn = QToolButton()
         self.core_config_btn.setObjectName("aiCoreSegmentRight")
         self.core_config_btn.setText("🔍")
         self.core_config_btn.setToolTip("配置本表核心字段")
         self.core_config_btn.setAutoRaise(False)
-        self.core_config_btn.setFixedHeight(34)
+        self.core_config_btn.setFixedHeight(32)
         self.core_button_group = QFrame()
         self.core_button_group.setObjectName("aiCoreButtonGroup")
         self.core_button_group_layout = QHBoxLayout(self.core_button_group)
@@ -1662,8 +1665,11 @@ class TableNavItem(QFrame):
 
 
 class AIChatDialog(QDialog):
-    def __init__(self, analysis_payload, parent=None):
-        super().__init__(parent)
+    def __init__(self, analysis_payload, parent=None, reference_widget=None):
+        super().__init__(None)
+        self.reference_widget = reference_widget or parent
+        self.setAttribute(Qt.WA_DeleteOnClose, True)
+        self._configure_window_flags()
         self.analysis_payload = analysis_payload
         self.history_messages = []
         self.current_context_recommendation = None
@@ -1688,13 +1694,60 @@ class AIChatDialog(QDialog):
         self.pressure_timer.setInterval(CONTEXT_PRESSURE_REFRESH_DELAY_MS)
         self.pressure_timer.timeout.connect(self._apply_pending_pressure_refresh)
         self.setWindowTitle("智能分析助手")
-        self.resize(1280, 760)
         self.setup_ui()
+        self._apply_default_geometry()
+
+    def _configure_window_flags(self):
+        self.setWindowFlag(Qt.Window, True)
+        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        self.setWindowFlag(Qt.WindowSystemMenuHint, True)
+        self.setWindowFlag(Qt.WindowMinimizeButtonHint, True)
+        self.setWindowFlag(Qt.WindowMaximizeButtonHint, True)
+        self.setWindowFlag(Qt.WindowCloseButtonHint, True)
 
     def closeEvent(self, event):
         if self.worker:
             self.worker.stop()
         event.accept()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._center_on_reference_geometry()
+
+    def _reference_geometry(self):
+        reference_widget = getattr(self, "reference_widget", None)
+        if reference_widget is not None:
+            reference_window = reference_widget.window()
+            if reference_window is not None:
+                geometry = reference_window.geometry()
+                if geometry.isValid() and geometry.width() > 0 and geometry.height() > 0:
+                    return geometry
+
+        screen = QApplication.primaryScreen()
+        if screen is not None:
+            return screen.availableGeometry()
+        return None
+
+    def _preferred_geometry_size(self, reference_geometry):
+        width = max(1, int(reference_geometry.width() * AI_CHAT_WINDOW_WIDTH_RATIO))
+        height = max(1, int(reference_geometry.height() * AI_CHAT_WINDOW_HEIGHT_RATIO))
+        return width, height
+
+    def _apply_default_geometry(self):
+        reference_geometry = self._reference_geometry()
+        if reference_geometry is None:
+            self.resize(1280, 760)
+            return
+        width, height = self._preferred_geometry_size(reference_geometry)
+        self.resize(width, height)
+
+    def _center_on_reference_geometry(self):
+        reference_geometry = self._reference_geometry()
+        if reference_geometry is None:
+            return
+        dialog_geometry = self.frameGeometry()
+        dialog_geometry.moveCenter(reference_geometry.center())
+        self.move(dialog_geometry.topLeft())
 
     def refresh_models(self):
         self.model_combo.blockSignals(True)

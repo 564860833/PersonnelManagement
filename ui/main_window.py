@@ -537,6 +537,8 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         """关闭时确保数据库连接关闭"""
         logger.info(f"用户 {self.username} 退出系统")
+        if self.query_tab is not None and hasattr(self.query_tab, 'close_ai_dialog'):
+            self.query_tab.close_ai_dialog()
         if hasattr(self.db, 'close'):
             self.db.close()
         event.accept()

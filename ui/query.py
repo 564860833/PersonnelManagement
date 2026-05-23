@@ -1071,9 +1071,7 @@ class QueryTab(QWidget):
         self.update_pagination_controls(0, 0)
         self.update_table_buttons(False)
 
-        if self.ai_dialog is not None:
-            self.ai_dialog.close()
-            self.ai_dialog = None
+        self.close_ai_dialog()
 
     def show_status_message(self, message: str, timeout: int = 6000):
         """在主窗口状态栏显示查询反馈。"""
@@ -1188,13 +1186,21 @@ class QueryTab(QWidget):
 
     def open_ai_dialog(self, analysis_payload):
         """创建并显示 AI 分析窗口。"""
-        if hasattr(self, 'ai_dialog') and self.ai_dialog is not None:
-            self.ai_dialog.close()
+        self.close_ai_dialog()
 
         from ui.ai_chat import AIChatDialog
-        self.ai_dialog = AIChatDialog(analysis_payload, self)
+        self.ai_dialog = AIChatDialog(analysis_payload, reference_widget=self)
+        self.ai_dialog.destroyed.connect(lambda _obj=None: setattr(self, "ai_dialog", None))
         self.ai_dialog.setWindowTitle("智能分析 - 查询结果")
         self.ai_dialog.show()
+
+    def close_ai_dialog(self):
+        """Close the independent AI analysis window if it is open."""
+        if getattr(self, "ai_dialog", None) is None:
+            return
+        dialog = self.ai_dialog
+        self.ai_dialog = None
+        dialog.close()
 
     def show_table_data(self, table_name: str):
         """显示指定表的数据"""

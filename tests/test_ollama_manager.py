@@ -29,6 +29,29 @@ class OllamaManagerTests(unittest.TestCase):
                 ollama_manager.ollama_api_url("/api/tags"),
             )
 
+    def test_fetch_ollama_models_sorts_by_size_then_name(self):
+        response = {
+            "models": [
+                {"name": "qwen2:7b", "size": 8192000000},
+                {"name": "qwen2:0.5b", "size": 500000000},
+                {"name": "qwen2:1.5b", "size": 1500000000},
+                {"name": "qwen2:1.5b-instruct", "size": 1500000000},
+            ]
+        }
+
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return response
+
+        with patch("services.ollama_manager.requests.get", return_value=FakeResponse()):
+            available, models = ollama_manager.fetch_ollama_models()
+
+        self.assertTrue(available)
+        self.assertEqual(["qwen2:0.5b", "qwen2:1.5b", "qwen2:1.5b-instruct", "qwen2:7b"], models)
+
     def test_find_ollama_executable_prefers_app_local_runtime(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             app_dir = Path(temp_dir)

@@ -8,8 +8,8 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt5.QtCore import QPoint
-from PyQt5.QtWidgets import QApplication, QComboBox
+from PyQt5.QtCore import QPoint, Qt
+from PyQt5.QtWidgets import QApplication, QComboBox, QWidget
 
 from services.ai_context import ContextRecommendation, HardwareSnapshot
 from services.ai_direct import ask_model, build_messages
@@ -17,6 +17,8 @@ from ui.ai_chat import (
     AI_CHAT_STYLE,
     AIChatDialog,
     AIWorker,
+    AI_CHAT_WINDOW_HEIGHT_RATIO,
+    AI_CHAT_WINDOW_WIDTH_RATIO,
     CORE_FIELDS,
     CoreFieldSelectionDialog,
     FieldSelectionPage,
@@ -106,6 +108,31 @@ class FakeOllamaStatus:
     def __init__(self, service_available, message=""):
         self.service_available = service_available
         self.message = message
+
+
+class FakeSignal:
+    def __init__(self):
+        self.callbacks = []
+
+    def connect(self, callback):
+        self.callbacks.append(callback)
+
+
+class FakeDialog:
+    def __init__(self):
+        self.destroyed = FakeSignal()
+        self.closed = False
+        self.title = ""
+        self.shown = False
+
+    def close(self):
+        self.closed = True
+
+    def setWindowTitle(self, title):
+        self.title = title
+
+    def show(self):
+        self.shown = True
 
 
 class FakeDb:
@@ -458,8 +485,8 @@ class TestAIChatDialogBehavior(unittest.TestCase):
         self.assertIs(page.core_button_group_layout.itemAt(1).widget(), page.core_config_btn)
         self.assertEqual("🔍", page.core_config_btn.text())
         self.assertEqual(page.core_btn.height(), page.core_config_btn.height())
-        self.assertEqual(34, page.core_btn.maximumHeight())
-        self.assertEqual(34, page.core_config_btn.maximumHeight())
+        self.assertEqual(32, page.core_btn.maximumHeight())
+        self.assertEqual(32, page.core_config_btn.maximumHeight())
         self.assertEqual("人员基本信息（2行）", page.title_label.text())
         self.assertEqual(page.field_header_layout.count(), 5)
         self.assertEqual(0, page.field_header_layout.indexOf(page.title_label))
@@ -621,7 +648,7 @@ class TestAIChatDialogBehavior(unittest.TestCase):
             self.assertGreaterEqual(dialog.sidebar_panel.minimumWidth(), NAV_SIDEBAR_MIN_WIDTH)
             self.assertGreaterEqual(item.minimumWidth(), TABLE_NAV_BUTTON_MIN_WIDTH + item.enable_switch.width())
             self.assertGreaterEqual(item.nav_button.minimumWidth(), TABLE_NAV_BUTTON_MIN_WIDTH)
-            self.assertTrue(item.enable_switch.sizePolicy().horizontalPolicy(), item.enable_switch.sizePolicy().Fixed)
+            self.assertEqual(item.enable_switch.sizePolicy().Fixed, item.enable_switch.sizePolicy().horizontalPolicy())
             self.assertFalse(dialog.column_summary_label.wordWrap())
 
             dialog.switch_to_chat()
@@ -632,6 +659,36 @@ class TestAIChatDialogBehavior(unittest.TestCase):
             self.assertFalse(dialog.enabled_tables["base_info"])
             self.assertIs(dialog.workspace_stack.currentWidget(), current_page)
             self.assertFalse(item.nav_button.isEnabled())
+        finally:
+            dialog.close()
+
+    def test_ai_dialog_default_geometry_scales_to_parent_and_centers(self):
+        reference = QWidget()
+        reference.setGeometry(100, 80, 1600, 1000)
+        with patch("ui.ai_chat.fetch_ollama_models", return_value=(True, ["qwen2:latest"])):
+            dialog = AIChatDialog(payload(), reference_widget=reference)
+        try:
+            self.assertIsNone(dialog.parentWidget())
+            self.assertEqual(int(1600 * AI_CHAT_WINDOW_WIDTH_RATIO), dialog.width())
+            self.assertEqual(int(1000 * AI_CHAT_WINDOW_HEIGHT_RATIO), dialog.height())
+
+            dialog._center_on_reference_geometry()
+            self.assertEqual(reference.geometry().center(), dialog.frameGeometry().center())
+        finally:
+            dialog.close()
+            reference.close()
+
+    def test_ai_dialog_window_flags_include_independent_window_controls(self):
+        with patch("ui.ai_chat.fetch_ollama_models", return_value=(True, ["qwen2:latest"])):
+            dialog = AIChatDialog(payload())
+        try:
+            flags = dialog.windowFlags()
+            self.assertTrue(bool(flags & Qt.Window))
+            self.assertTrue(bool(flags & Qt.WindowMinimizeButtonHint))
+            self.assertTrue(bool(flags & Qt.WindowMaximizeButtonHint))
+            self.assertTrue(bool(flags & Qt.WindowCloseButtonHint))
+            self.assertFalse(bool(flags & Qt.WindowContextHelpButtonHint))
+            self.assertIsNone(dialog.parentWidget())
         finally:
             dialog.close()
 
@@ -1028,6 +1085,30 @@ class AIChatDirectModelTests(unittest.TestCase):
 
         open_dialog.assert_not_called()
         warning.assert_called_once()
+
+    def test_open_ai_dialog_creates_independent_window_with_reference_widget(self):
+        tab = self.make_query_tab_stub()
+        analysis_payload = payload()
+        created_dialog = FakeDialog()
+
+        with patch("ui.ai_chat.AIChatDialog", return_value=created_dialog) as dialog_class:
+            QueryTab.open_ai_dialog(tab, analysis_payload)
+
+        dialog_class.assert_called_once_with(analysis_payload, reference_widget=tab)
+        self.assertIs(tab.ai_dialog, created_dialog)
+        self.assertEqual("智能分析 - 查询结果", created_dialog.title)
+        self.assertTrue(created_dialog.shown)
+        self.assertEqual(1, len(created_dialog.destroyed.callbacks))
+
+    def test_close_ai_dialog_closes_current_window_and_clears_reference(self):
+        tab = self.make_query_tab_stub()
+        existing_dialog = FakeDialog()
+        tab.ai_dialog = existing_dialog
+
+        QueryTab.close_ai_dialog(tab)
+
+        self.assertTrue(existing_dialog.closed)
+        self.assertIsNone(tab.ai_dialog)
 
     def test_build_ai_analysis_payload_keeps_permitted_schema_with_empty_rows(self):
         results = {
