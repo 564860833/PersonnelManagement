@@ -7,6 +7,7 @@ from pathlib import Path
 
 import markdown
 from PyQt5.QtCore import QPoint, QRect, QSize, QObject, QTimer, Qt, pyqtSignal
+from PyQt5.QtGui import QColor, QPainter
 from PyQt5.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -243,6 +244,10 @@ QPushButton#aiNavButton:disabled {
     color: #8C959F;
     background-color: #F6F8FA;
     border-color: #EAEEF2;
+}
+QFrame#aiTableNavItem {
+    background-color: transparent;
+    border: none;
 }
 QLabel#aiNavSummary,
 QLabel#aiColumnSummary,
@@ -1578,6 +1583,93 @@ class FieldSelectionPage(QFrame):
         QTimer.singleShot(0, self.reflow_fields)
 
 
+class TableEnableSwitch(QCheckBox):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedSize(42, 24)
+        self.setToolTip("发送此表给 AI")
+
+    def sizeHint(self):
+        return QSize(42, 24)
+
+    def hitButton(self, pos):
+        return self.rect().contains(pos)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(Qt.NoPen)
+
+        checked = self.isChecked()
+        enabled = self.isEnabled()
+        if checked and enabled:
+            track_color = QColor("#1E5AA8")
+            knob_color = QColor("#FFFFFF")
+        elif checked:
+            track_color = QColor("#BBD4F0")
+            knob_color = QColor("#F6F8FA")
+        elif enabled:
+            track_color = QColor("#D8DEE4")
+            knob_color = QColor("#FFFFFF")
+        else:
+            track_color = QColor("#EAEEF2")
+            knob_color = QColor("#F6F8FA")
+
+        track_rect = self.rect().adjusted(2, 4, -2, -4)
+        radius = track_rect.height() / 2
+        painter.setBrush(track_color)
+        painter.drawRoundedRect(track_rect, radius, radius)
+
+        knob_size = track_rect.height() - 4
+        knob_x = (
+            track_rect.right() - knob_size - 2
+            if checked
+            else track_rect.left() + 2
+        )
+        knob_rect = QRect(knob_x, track_rect.top() + 2, knob_size, knob_size)
+        painter.setBrush(knob_color)
+        painter.drawEllipse(knob_rect)
+
+
+class TableNavItem(QFrame):
+    toggled = pyqtSignal(str, bool)
+
+    def __init__(self, table_name: str, nav_button: QPushButton, parent=None):
+        super().__init__(parent)
+        self.table_name = table_name
+        self.nav_button = nav_button
+        self.setObjectName("aiTableNavItem")
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        self.nav_button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.enable_switch = TableEnableSwitch(self)
+        self.enable_switch.setChecked(True)
+        self.enable_switch.toggled.connect(self._emit_toggled)
+
+        layout.addWidget(self.nav_button, 1)
+        layout.addWidget(self.enable_switch, 0, Qt.AlignVCenter)
+
+    def _emit_toggled(self, enabled: bool):
+        self.toggled.emit(self.table_name, bool(enabled))
+
+    def set_table_enabled(self, enabled: bool):
+        previous = self.enable_switch.blockSignals(True)
+        try:
+            self.enable_switch.setChecked(bool(enabled))
+        finally:
+            self.enable_switch.blockSignals(previous)
+        self.nav_button.setEnabled(bool(enabled))
+        self.enable_switch.setToolTip("发送此表给 AI" if enabled else "不发送此表给 AI")
+
+    def set_controls_enabled(self, controls_enabled: bool, table_enabled: bool):
+        self.nav_button.setEnabled(bool(controls_enabled and table_enabled))
+        self.enable_switch.setEnabled(bool(controls_enabled))
+
+
 class AIChatDialog(QDialog):
     def __init__(self, analysis_payload, parent=None):
         super().__init__(parent)
@@ -1591,6 +1683,12 @@ class AIChatDialog(QDialog):
         self.column_checks = {}
         self.table_pages = {}
         self.table_nav_buttons = {}
+        self.table_nav_items = {}
+        self.enabled_tables = {}
+        self._selected_payload_cache_key = None
+        self._selected_payload_cache = None
+        self._payload_token_cache_key = None
+        self._payload_token_cache_value = None
         self._pressure_refresh_scheduled = False
         self._pressure_refresh_pending = False
         self.pressure_timer = QTimer(self)
@@ -1675,7 +1773,13 @@ class AIChatDialog(QDialog):
             return
 
         selected_payload = self.selected_analysis_payload()
-        estimated_tokens = estimate_payload_tokens(selected_payload)
+        selection_key = self._selected_payload_cache_key
+        if selection_key == self._payload_token_cache_key and self._payload_token_cache_value is not None:
+            estimated_tokens = self._payload_token_cache_value
+        else:
+            estimated_tokens = estimate_payload_tokens(selected_payload)
+            self._payload_token_cache_key = selection_key
+            self._payload_token_cache_value = estimated_tokens
         context_limit = max(
             1,
             int(
@@ -1707,8 +1811,8 @@ class AIChatDialog(QDialog):
         page = _safe_instance_value(self, "table_pages", {}).get(table_name)
         if page:
             page.refresh_badge()
+        self.invalidate_selection_caches()
         self.refresh_column_summary()
-        self.schedule_context_pressure_refresh()
 
     def setup_ui(self):
         layout = QVBoxLayout()
@@ -1810,6 +1914,13 @@ class AIChatDialog(QDialog):
         button.setCursor(Qt.PointingHandCursor)
         return button
 
+    def create_table_nav_item(self, table_name: str, table_label: str):
+        nav_button = self.create_nav_button(table_label)
+        nav_item = TableNavItem(table_name, nav_button)
+        nav_item.toggled.connect(self.on_table_enabled_changed)
+        nav_button.clicked.connect(lambda _checked=False, name=table_name: self.switch_to_table(name))
+        return nav_item
+
     def create_global_controls_panel(self):
         settings_panel = QFrame()
         settings_panel.setObjectName("aiSidebarSection")
@@ -1819,9 +1930,6 @@ class AIChatDialog(QDialog):
 
         settings_header = QHBoxLayout()
         settings_header.setSpacing(8)
-        settings_title = QLabel("模型与上下文")
-        settings_title.setObjectName("aiSectionTitle")
-        settings_header.addWidget(settings_title)
         settings_header.addStretch()
         self.model_status_label = QLabel("正在初始化")
         self.model_status_label.setObjectName("aiModelStatus")
@@ -1922,6 +2030,7 @@ class AIChatDialog(QDialog):
         schemas = dict((self.analysis_payload or {}).get("schemas") or {})
         tables = dict((self.analysis_payload or {}).get("tables") or {})
         self.column_checks = {}
+        self.enabled_tables = {}
 
         insert_index = max(0, self.table_nav_layout.count() - 1)
         for table_name, schema in schemas.items():
@@ -1940,13 +2049,15 @@ class AIChatDialog(QDialog):
             page.return_requested.connect(self.switch_to_chat)
             self.table_pages[table_name] = page
             self.column_checks[table_name] = page.checkboxes
+            self.enabled_tables[table_name] = True
             self.workspace_stack.addWidget(page)
 
-            nav_button = self.create_nav_button(table_label)
-            nav_button.clicked.connect(lambda _checked=False, name=table_name: self.switch_to_table(name))
+            nav_item = self.create_table_nav_item(table_name, table_label)
+            nav_button = nav_item.nav_button
+            self.table_nav_items[table_name] = nav_item
             self.table_nav_buttons[table_name] = nav_button
             self.nav_button_group.addButton(nav_button)
-            self.table_nav_layout.insertWidget(insert_index, nav_button)
+            self.table_nav_layout.insertWidget(insert_index, nav_item)
             insert_index += 1
 
         self.refresh_table_navigation()
@@ -1963,6 +2074,9 @@ class AIChatDialog(QDialog):
             chat_nav_btn.setChecked(True)
 
     def switch_to_table(self, table_name: str):
+        if not self.is_table_enabled(table_name):
+            return
+
         page = _safe_instance_value(self, "table_pages", {}).get(table_name)
         stack = _safe_instance_value(self, "workspace_stack")
         if stack is not None and page is not None:
@@ -1972,9 +2086,33 @@ class AIChatDialog(QDialog):
         if nav_button is not None:
             nav_button.setChecked(True)
 
+    def is_table_enabled(self, table_name: str) -> bool:
+        return bool(_safe_instance_value(self, "enabled_tables", {}).get(table_name, True))
+
+    def on_table_enabled_changed(self, table_name: str, enabled: bool):
+        if table_name not in _safe_instance_value(self, "table_pages", {}):
+            return
+
+        self.enabled_tables[table_name] = bool(enabled)
+        self.invalidate_selection_caches()
+        if not enabled and self.is_current_table_page(table_name):
+            self.switch_to_chat()
+        self.refresh_column_summary()
+
+    def is_current_table_page(self, table_name: str) -> bool:
+        stack = _safe_instance_value(self, "workspace_stack")
+        page = _safe_instance_value(self, "table_pages", {}).get(table_name)
+        if stack is None or page is None or not hasattr(stack, "currentWidget"):
+            return False
+        try:
+            return stack.currentWidget() is page
+        except RuntimeError:
+            return False
+
     def refresh_table_navigation(self):
         for table_name, page in _safe_instance_value(self, "table_pages", {}).items():
             nav_button = _safe_instance_value(self, "table_nav_buttons", {}).get(table_name)
+            nav_item = _safe_instance_value(self, "table_nav_items", {}).get(table_name)
             if page is None:
                 continue
             page.refresh_badge()
@@ -1983,30 +2121,100 @@ class AIChatDialog(QDialog):
                 total_count = page.total_count()
                 nav_button.setText(f"{page.table_label}\n已选 {selected_count}/{total_count}")
                 nav_button.setToolTip(f"{page.table_label} · {page.row_count} 行 · 已选 {selected_count}/{total_count}")
+                nav_button.setEnabled(self.is_table_enabled(table_name) and not self.is_inference_running)
+            if nav_item is not None:
+                nav_item.set_table_enabled(self.is_table_enabled(table_name))
+                nav_item.set_controls_enabled(not self.is_inference_running, self.is_table_enabled(table_name))
 
     def selected_column_map(self) -> dict:
+        schemas = dict((self.analysis_payload or {}).get("schemas") or {})
         selection = {}
-        for table_name, checks in self.column_checks.items():
+        for table_name, schema in schemas.items():
+            if not self.is_table_enabled(table_name):
+                continue
+            checks = self.column_checks.get(table_name) or {}
             selected = []
-            for field_name, check in checks.items():
-                if check.isChecked() or field_name in IDENTITY_FIELDS:
-                    selected.append(field_name)
+            if checks:
+                for field_name, check in checks.items():
+                    if check.isChecked() or field_name in IDENTITY_FIELDS:
+                        selected.append(field_name)
+            else:
+                for column in schema.get("columns") or []:
+                    if not isinstance(column, dict):
+                        continue
+                    field_name = str(column.get("name", "")).strip()
+                    if field_name in IDENTITY_FIELDS:
+                        selected.append(field_name)
             if selected:
                 selection[table_name] = selected
         return selection
 
+    def selected_payload_cache_key(self, selection=None):
+        selection = selection if selection is not None else self.selected_column_map()
+        return tuple(
+            (table_name, tuple(fields))
+            for table_name, fields in selection.items()
+        )
+
+    def invalidate_selection_caches(self):
+        self._selected_payload_cache_key = None
+        self._selected_payload_cache = None
+        self._payload_token_cache_key = None
+        self._payload_token_cache_value = None
+
+    def selected_payload_stats(self) -> tuple:
+        tables = dict((self.analysis_payload or {}).get("tables") or {})
+        selection = self.selected_column_map()
+        table_count = 0
+        column_count = 0
+        row_count = 0
+        for table_name, selected_fields in selection.items():
+            if not selected_fields:
+                continue
+            table = dict(tables.get(table_name) or {})
+            rows = table.get("rows") or []
+            table_count += 1
+            column_count += len(selected_fields)
+            row_count += len(rows) if hasattr(rows, "__len__") else sum(1 for _ in rows)
+        return table_count, column_count, row_count
+
+    def enabled_analysis_payload(self) -> dict:
+        payload = self.analysis_payload or {}
+        schemas = dict(payload.get("schemas") or {})
+        tables = dict(payload.get("tables") or {})
+        return {
+            "schemas": {
+                table_name: schema
+                for table_name, schema in schemas.items()
+                if self.is_table_enabled(table_name)
+            },
+            "tables": {
+                table_name: table
+                for table_name, table in tables.items()
+                if self.is_table_enabled(table_name)
+            },
+        }
+
     def selected_analysis_payload(self) -> dict:
-        return filter_analysis_payload_by_columns(self.analysis_payload, self.selected_column_map())
+        selection = self.selected_column_map()
+        cache_key = self.selected_payload_cache_key(selection)
+        if cache_key != self._selected_payload_cache_key or self._selected_payload_cache is None:
+            self._selected_payload_cache = filter_analysis_payload_by_columns(
+                self.enabled_analysis_payload(),
+                selection,
+            )
+            self._selected_payload_cache_key = cache_key
+        return self._selected_payload_cache
 
     def has_selected_analysis_payload(self) -> bool:
-        table_count, column_count, _ = count_payload_content(self.selected_analysis_payload())
+        table_count, column_count, _ = self.selected_payload_stats()
         return table_count > 0 and column_count > 0
 
     def refresh_column_summary(self):
         column_summary_label = _safe_instance_value(self, "column_summary_label")
         if column_summary_label is None:
             return
-        table_count, column_count, row_count = count_payload_content(self.selected_analysis_payload())
+        table_count, column_count, row_count = self.selected_payload_stats()
         column_summary_label.setText(f"将发送 {table_count} 个表 / {column_count} 列 / {row_count} 行")
         self.refresh_table_navigation()
         if _safe_instance_value(self, "send_btn") is not None:
@@ -2033,11 +2241,12 @@ class AIChatDialog(QDialog):
         if self.is_inference_running:
             return
 
-        selected_payload = self.selected_analysis_payload()
-        if not count_payload_content(selected_payload)[1]:
+        if not self.has_selected_analysis_payload():
             self.status_label.setText("请至少选择一个可分析字段后再发送。")
             self.update_action_state()
             return
+
+        selected_payload = self.selected_analysis_payload()
 
         recommendation = self.current_context_recommendation or self.refresh_context_recommendation(model_name)
         n_ctx = recommendation.n_ctx
@@ -2109,8 +2318,10 @@ class AIChatDialog(QDialog):
             clear_btn.setEnabled(not self.is_inference_running)
         if _safe_instance_value(self, "chat_nav_btn") is not None:
             _safe_instance_value(self, "chat_nav_btn").setEnabled(not self.is_inference_running)
-        for nav_button in _safe_instance_value(self, "table_nav_buttons", {}).values():
-            nav_button.setEnabled(not self.is_inference_running)
+        for table_name, nav_button in _safe_instance_value(self, "table_nav_buttons", {}).items():
+            nav_button.setEnabled(not self.is_inference_running and self.is_table_enabled(table_name))
+        for table_name, nav_item in _safe_instance_value(self, "table_nav_items", {}).items():
+            nav_item.set_controls_enabled(not self.is_inference_running, self.is_table_enabled(table_name))
         for page in _safe_instance_value(self, "table_pages", {}).values():
             for field_name, check in page.checkboxes.items():
                 check.setEnabled(field_name not in IDENTITY_FIELDS and not self.is_inference_running)

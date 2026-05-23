@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PyQt5.QtCore import QPoint
 from PyQt5.QtWidgets import QApplication
 
 from services.ai_context import ContextRecommendation, HardwareSnapshot
@@ -20,7 +21,10 @@ from ui.ai_chat import (
     CoreFieldSelectionDialog,
     FieldSelectionPage,
     MODEL_PLACEHOLDER,
+    TableNavItem,
+    TableEnableSwitch,
     core_fields_for_table,
+    estimate_payload_tokens,
     filter_analysis_payload_by_columns,
     group_columns_for_table,
     render_message_html,
@@ -239,6 +243,12 @@ class TestAIChatDialogBehavior(unittest.TestCase):
         dialog.column_checks = {}
         dialog.table_pages = {}
         dialog.table_nav_buttons = {}
+        dialog.table_nav_items = {}
+        dialog.enabled_tables = {}
+        dialog._selected_payload_cache_key = None
+        dialog._selected_payload_cache = None
+        dialog._payload_token_cache_key = None
+        dialog._payload_token_cache_value = None
         dialog._pressure_refresh_pending = False
         dialog.pressure_timer = type(
             "FakeTimer",
@@ -273,7 +283,15 @@ class TestAIChatDialogBehavior(unittest.TestCase):
         dialog.clear_btn = FakeButton()
         dialog.chat_history = FakeHistory()
         dialog.chat_nav_btn = FakeButton()
-        dialog.workspace_stack = type("Stack", (), {"current": None, "setCurrentWidget": lambda self, widget: setattr(self, "current", widget)})()
+        dialog.workspace_stack = type(
+            "Stack",
+            (),
+            {
+                "current": None,
+                "setCurrentWidget": lambda self, widget: setattr(self, "current", widget),
+                "currentWidget": lambda self: self.current,
+            },
+        )()
         return dialog
 
     def build_page(self, dialog):
@@ -293,7 +311,9 @@ class TestAIChatDialogBehavior(unittest.TestCase):
         page.return_requested.connect(lambda: None)
         dialog.table_pages = {"base_info": page}
         dialog.table_nav_buttons = {"base_info": FakeButton()}
+        dialog.table_nav_items = {}
         dialog.column_checks = {"base_info": page.checkboxes}
+        dialog.enabled_tables = {"base_info": True}
         return page
 
     def get_group(self, page, label):
@@ -499,6 +519,14 @@ class TestAIChatDialogBehavior(unittest.TestCase):
         self.assertTrue(dialog.pressure_timer.started)
         self.assertTrue(dialog._pressure_refresh_pending)
 
+    def test_table_enable_switch_entire_rect_is_clickable(self):
+        switch = TableEnableSwitch()
+
+        self.assertTrue(switch.hitButton(QPoint(2, 12)))
+        self.assertTrue(switch.hitButton(QPoint(21, 12)))
+        self.assertTrue(switch.hitButton(QPoint(40, 12)))
+        self.assertFalse(switch.hitButton(QPoint(43, 12)))
+
     def test_navigation_switches_workspace_pages(self):
         dialog = self.make_dialog()
         dialog.table_pages = {
@@ -526,6 +554,118 @@ class TestAIChatDialogBehavior(unittest.TestCase):
 
         AIChatDialog.switch_to_chat(dialog)
         self.assertIs(dialog.workspace_stack.current, dialog.chat_page)
+
+    def test_table_nav_item_switch_toggles_without_navigation_click(self):
+        with patch("ui.ai_chat.fetch_ollama_models", return_value=(True, ["qwen2:latest"])):
+            dialog = AIChatDialog(payload())
+        try:
+            item = dialog.table_nav_items["base_info"]
+            self.assertIsInstance(item, TableNavItem)
+            self.assertIs(dialog.table_nav_buttons["base_info"], item.nav_button)
+            self.assertTrue(item.enable_switch.isChecked())
+
+            dialog.switch_to_chat()
+            current_page = dialog.workspace_stack.currentWidget()
+            item.enable_switch.click()
+            self.app.processEvents()
+
+            self.assertFalse(dialog.enabled_tables["base_info"])
+            self.assertIs(dialog.workspace_stack.currentWidget(), current_page)
+            self.assertFalse(item.nav_button.isEnabled())
+        finally:
+            dialog.close()
+
+    def test_disabled_table_is_removed_from_selected_payload_until_reenabled(self):
+        dialog = self.make_dialog()
+        page = self.build_page(dialog)
+        page.checkboxes["department"].setChecked(True)
+        dialog.enabled_tables = {"base_info": False, "rewards": True}
+
+        disabled_payload = dialog.selected_analysis_payload()
+
+        self.assertNotIn("base_info", disabled_payload["tables"])
+        self.assertIn("rewards", disabled_payload["tables"])
+
+        dialog.enabled_tables["base_info"] = True
+        enabled_payload = dialog.selected_analysis_payload()
+
+        self.assertIn("base_info", enabled_payload["tables"])
+        self.assertIn("department", enabled_payload["tables"]["base_info"]["field_labels"])
+
+    def test_disabling_current_table_returns_to_chat_and_blocks_navigation(self):
+        dialog = self.make_dialog()
+        page = self.build_page(dialog)
+        dialog.chat_page = object()
+        dialog.workspace_stack.setCurrentWidget(page)
+
+        dialog.on_table_enabled_changed("base_info", False)
+
+        self.assertIs(dialog.workspace_stack.currentWidget(), dialog.chat_page)
+        self.assertFalse(dialog.enabled_tables["base_info"])
+        self.assertFalse(dialog.table_nav_buttons["base_info"].enabled)
+
+        dialog.switch_to_table("base_info")
+
+        self.assertIs(dialog.workspace_stack.currentWidget(), dialog.chat_page)
+
+    def test_all_disabled_tables_disable_send_and_show_empty_summary(self):
+        dialog = self.make_dialog()
+        self.build_page(dialog)
+        dialog.enabled_tables = {"base_info": False, "rewards": False}
+
+        dialog.refresh_column_summary()
+
+        self.assertEqual("将发送 0 个表 / 0 列 / 0 行", dialog.column_summary_label.text)
+        self.assertFalse(dialog.send_btn.enabled)
+
+    def test_summary_and_action_state_do_not_build_full_payload(self):
+        dialog = self.make_dialog()
+        page = self.build_page(dialog)
+        page.checkboxes["department"].setChecked(True)
+
+        with patch("ui.ai_chat.filter_analysis_payload_by_columns", side_effect=AssertionError("full payload built")):
+            dialog.refresh_column_summary()
+            dialog.update_action_state()
+
+        self.assertEqual("将发送 2 个表 / 6 列 / 2 行", dialog.column_summary_label.text)
+        self.assertTrue(dialog.send_btn.enabled)
+
+    def test_selected_analysis_payload_uses_cache_until_selection_changes(self):
+        dialog = self.make_dialog()
+        page = self.build_page(dialog)
+
+        with patch(
+            "ui.ai_chat.filter_analysis_payload_by_columns",
+            wraps=filter_analysis_payload_by_columns,
+        ) as payload_filter:
+            first_payload = dialog.selected_analysis_payload()
+            second_payload = dialog.selected_analysis_payload()
+
+            self.assertIs(first_payload, second_payload)
+            self.assertEqual(1, payload_filter.call_count)
+
+            page.checkboxes["department"].setChecked(True)
+            dialog.on_table_selection_changed("base_info")
+            updated_payload = dialog.selected_analysis_payload()
+
+            self.assertIsNot(updated_payload, first_payload)
+            self.assertEqual(2, payload_filter.call_count)
+            self.assertIn("department", updated_payload["tables"]["base_info"]["field_labels"])
+
+    def test_context_pressure_reuses_token_estimate_for_same_selection(self):
+        dialog = self.make_dialog()
+        self.build_page(dialog)
+
+        with patch("ui.ai_chat.estimate_payload_tokens", wraps=estimate_payload_tokens) as estimate:
+            dialog.refresh_context_pressure()
+            dialog.refresh_context_pressure()
+
+            self.assertEqual(1, estimate.call_count)
+
+            dialog.on_table_enabled_changed("base_info", False)
+            dialog.refresh_context_pressure()
+
+            self.assertEqual(2, estimate.call_count)
 
     def test_sidebar_nav_buttons_share_capsule_style(self):
         dialog = self.make_dialog()
