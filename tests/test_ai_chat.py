@@ -13,9 +13,11 @@ from PyQt5.QtWidgets import QApplication
 from services.ai_context import ContextRecommendation, HardwareSnapshot
 from services.ai_direct import ask_model, build_messages
 from ui.ai_chat import (
+    AI_CHAT_STYLE,
     AIChatDialog,
     AIWorker,
     CORE_FIELDS,
+    CoreFieldSelectionDialog,
     FieldSelectionPage,
     MODEL_PLACEHOLDER,
     core_fields_for_table,
@@ -360,27 +362,54 @@ class TestAIChatDialogBehavior(unittest.TestCase):
         stored = json.loads(self.core_config_path.read_text(encoding="utf-8"))
         self.assertEqual(["sequence", "name", "department"], stored["base_info"])
 
-    def test_core_field_menu_saves_and_restores_defaults(self):
+    def test_core_field_dialog_saves_and_restores_defaults(self):
         page = self.build_page(self.make_dialog())
 
-        page.populate_core_field_menu()
-        self.assertIs(page.core_config_btn.menu(), page.core_menu)
-        self.assertIn("department", page.core_field_checks)
-        self.assertFalse(page.core_field_checks["sequence"].isEnabled())
+        dialog = page.create_core_field_dialog()
+        self.assertIsInstance(dialog, CoreFieldSelectionDialog)
+        self.assertIsNone(page.core_config_btn.menu())
+        self.assertIn("department", dialog.core_field_checks)
+        self.assertFalse(dialog.core_field_checks["sequence"].isEnabled())
 
-        page.core_field_checks["department"].setChecked(True)
-        page.core_field_checks["current_grade"].setChecked(False)
-        page.save_core_fields_from_menu()
+        dialog.core_field_checks["department"].setChecked(True)
+        dialog.core_field_checks["current_grade"].setChecked(False)
+        dialog.choose_save()
+        self.assertEqual(CoreFieldSelectionDialog.SAVE_ACTION, dialog.action)
+        page.save_core_fields_from_dialog(dialog)
 
         self.assertTrue(page.checkboxes["department"].isChecked())
         self.assertFalse(page.checkboxes["current_grade"].isChecked())
 
+        restore_dialog = page.create_core_field_dialog()
+        restore_dialog.choose_restore_default()
+        self.assertEqual(CoreFieldSelectionDialog.RESTORE_DEFAULT_ACTION, restore_dialog.action)
         page.restore_default_core_fields()
 
         self.assertFalse(page.checkboxes["department"].isChecked())
         self.assertTrue(page.checkboxes["current_grade"].isChecked())
         stored = json.loads(self.core_config_path.read_text(encoding="utf-8"))
         self.assertNotIn("base_info", stored)
+
+    def test_core_segment_buttons_share_layout_but_keep_independent_actions(self):
+        page = self.build_page(self.make_dialog())
+
+        self.assertEqual(0, page.core_button_group_layout.spacing())
+        self.assertIs(page.core_button_group_layout.itemAt(0).widget(), page.core_btn)
+        self.assertIs(page.core_button_group_layout.itemAt(1).widget(), page.core_config_btn)
+        self.assertEqual("🔍", page.core_config_btn.text())
+
+        page.set_all_fields(True)
+        page.checkboxes["current_grade"].setChecked(False)
+        page.core_btn.click()
+
+        self.assertFalse(page.checkboxes["department"].isChecked())
+        self.assertTrue(page.checkboxes["current_grade"].isChecked())
+
+        opened = []
+        page.open_core_field_dialog = lambda: opened.append(True)
+        page.core_config_btn.click()
+
+        self.assertEqual([True], opened)
 
     def test_field_page_uses_group_blocks_and_global_actions(self):
         page = FieldSelectionPage(
@@ -497,6 +526,19 @@ class TestAIChatDialogBehavior(unittest.TestCase):
 
         AIChatDialog.switch_to_chat(dialog)
         self.assertIs(dialog.workspace_stack.current, dialog.chat_page)
+
+    def test_sidebar_nav_buttons_share_capsule_style(self):
+        dialog = self.make_dialog()
+
+        chat_button = AIChatDialog.create_nav_button(dialog, "当前对话", "聊天与提问")
+        table_button = AIChatDialog.create_nav_button(dialog, "人员基本信息")
+
+        self.assertEqual("aiNavButton", chat_button.objectName())
+        self.assertEqual("aiNavButton", table_button.objectName())
+        nav_style = AI_CHAT_STYLE.split("QPushButton#aiNavButton {", 1)[1].split("}", 1)[0]
+        self.assertIn("border: 1px solid #E5EAF0;", nav_style)
+        self.assertIn("background-color: #FBFDFF;", nav_style)
+        self.assertNotIn("QPushButton#aiTableNavButton", AI_CHAT_STYLE)
 
     def test_switching_to_field_page_reflows_tags_without_window_resize(self):
         with patch("ui.ai_chat.fetch_ollama_models", return_value=(True, ["qwen2:latest"])):

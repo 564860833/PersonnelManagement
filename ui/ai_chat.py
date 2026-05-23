@@ -17,7 +17,6 @@ from PyQt5.QtWidgets import (
     QLabel,
     QLayout,
     QLineEdit,
-    QMenu,
     QProgressBar,
     QPushButton,
     QScrollArea,
@@ -27,7 +26,6 @@ from PyQt5.QtWidgets import (
     QTextEdit,
     QToolButton,
     QVBoxLayout,
-    QWidgetAction,
     QWidget,
 )
 
@@ -226,20 +224,25 @@ QLabel#aiTableTitle {
 QPushButton#aiNavButton {
     text-align: left;
     padding: 10px 12px;
-    border: 1px solid transparent;
+    border: 1px solid #E5EAF0;
     border-radius: 8px;
-    background-color: transparent;
+    background-color: #FBFDFF;
     color: #24292F;
     font-weight: bold;
 }
 QPushButton#aiNavButton:hover {
     background-color: #F7FBFF;
-    border-color: #E5EAF0;
+    border-color: #CFE1F4;
 }
 QPushButton#aiNavButton:checked {
     color: #174A8B;
     background-color: #EAF2FB;
     border-color: #8BB6E8;
+}
+QPushButton#aiNavButton:disabled {
+    color: #8C959F;
+    background-color: #F6F8FA;
+    border-color: #EAEEF2;
 }
 QLabel#aiNavSummary,
 QLabel#aiColumnSummary,
@@ -321,33 +324,82 @@ QPushButton#aiFieldTag:disabled {
     background-color: #F6F8FA;
     color: #57606A;
 }
-QToolButton#secondaryToolButton {
-    padding: 7px 10px;
-    border: 1px solid #D0D7DE;
-    border-radius: 6px;
+QFrame#aiCoreButtonGroup {
+    background-color: transparent;
+    border: none;
+}
+QPushButton#aiCoreSegmentLeft {
+    min-height: 32px;
+    padding: 4px 14px;
+    border: 1px solid #C9D1D9;
+    border-top-left-radius: 5px;
+    border-bottom-left-radius: 5px;
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+    background-color: #FFFFFF;
+    color: #24292F;
+}
+QPushButton#aiCoreSegmentLeft:hover {
+    background-color: #EAF2FB;
+    border-color: #8BB6E8;
+    color: #174A8B;
+}
+QPushButton#aiCoreSegmentLeft:disabled {
+    background-color: #F6F8FA;
+    border-color: #EAEEF2;
+    color: #8C959F;
+}
+QToolButton#aiCoreSegmentRight {
+    min-height: 32px;
+    padding: 4px 12px;
+    border: 1px solid #C9D1D9;
+    border-left: none;
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+    border-top-right-radius: 5px;
+    border-bottom-right-radius: 5px;
     background-color: #FFFFFF;
     color: #174A8B;
     font-weight: bold;
 }
-QToolButton#secondaryToolButton:hover {
+QToolButton#aiCoreSegmentRight:hover {
+    background-color: #EAF2FB;
     border-color: #8BB6E8;
-    background-color: #F7FBFF;
+    border-left: none;
 }
-QToolButton#secondaryToolButton:disabled {
+QToolButton#aiCoreSegmentRight:disabled {
     color: #8C959F;
     background-color: #F6F8FA;
-    border-color: #D0D7DE;
+    border-color: #EAEEF2;
+    border-left: none;
 }
-QMenu#aiCoreFieldMenu {
+QFrame#aiCoreFilterPanel {
     background-color: #FFFFFF;
-    border: 1px solid #D0D7DE;
-    padding: 6px;
+    border: none;
+    border-radius: 8px;
 }
-QCheckBox#aiCoreFieldMenuCheck {
+QLabel#aiCoreFilterTitle {
+    color: #174A8B;
+    font-size: 16px;
+    font-weight: bold;
+}
+QLabel#aiCoreFilterMeta {
+    color: #57606A;
+}
+QFrame#aiCoreFilterGroup {
+    background-color: #FFFFFF;
+    border: 1px solid #E5EAF0;
+    border-radius: 8px;
+}
+QLabel#aiCoreFilterGroupTitle {
+    color: #174A8B;
+    font-weight: bold;
+}
+QCheckBox#aiCoreFieldDialogCheck {
     color: #24292F;
-    padding: 4px 8px;
+    padding: 4px 6px;
 }
-QCheckBox#aiCoreFieldMenuCheck:disabled {
+QCheckBox#aiCoreFieldDialogCheck:disabled {
     color: #57606A;
 }
 QLabel#aiModelStatus {
@@ -1152,6 +1204,135 @@ class FieldGroupBlock(QFrame):
         fields_wrap.update()
 
 
+class CoreFieldSelectionDialog(QDialog):
+    SAVE_ACTION = "save"
+    RESTORE_DEFAULT_ACTION = "restore_default"
+
+    def __init__(
+        self,
+        table_name: str,
+        table_label: str,
+        columns,
+        core_fields,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.table_name = table_name
+        self.table_label = table_label
+        self._columns = [column for column in columns if isinstance(column, dict)]
+        self.core_fields = set(core_fields or ())
+        self.core_field_checks = {}
+        self.action = None
+        self.setWindowTitle("核心字段筛选")
+        self.setModal(True)
+        self.resize(560, 620)
+        self.setStyleSheet(DIALOG_BASE_STYLE + DIALOG_BUTTON_STYLE + AI_CHAT_STYLE)
+        self.setup_ui()
+
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        panel = QFrame()
+        panel.setObjectName("aiCoreFilterPanel")
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(16, 14, 16, 14)
+        panel_layout.setSpacing(12)
+
+        title_label = QLabel("核心字段筛选")
+        title_label.setObjectName("aiCoreFilterTitle")
+        meta_label = QLabel(self.table_label)
+        meta_label.setObjectName("aiCoreFilterMeta")
+        panel_layout.addWidget(title_label)
+        panel_layout.addWidget(meta_label)
+
+        scroll = QScrollArea()
+        scroll.setObjectName("aiColumnScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        content = QWidget()
+        content.setObjectName("aiFieldScrollContent")
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(10)
+
+        for group in group_columns_for_table(self.table_name, self._columns):
+            group_block = self.create_group_block(group)
+            content_layout.addWidget(group_block)
+        content_layout.addStretch()
+
+        scroll.setWidget(content)
+        panel_layout.addWidget(scroll, 1)
+
+        button_row = QHBoxLayout()
+        button_row.setSpacing(8)
+        self.restore_btn = QPushButton("恢复默认核心字段")
+        self.restore_btn.setObjectName("secondaryButton")
+        self.cancel_btn = QPushButton("取消")
+        self.cancel_btn.setObjectName("secondaryButton")
+        self.save_btn = QPushButton("保存并应用")
+        self.save_btn.setObjectName("primaryButton")
+        self.restore_btn.clicked.connect(self.choose_restore_default)
+        self.cancel_btn.clicked.connect(self.reject)
+        self.save_btn.clicked.connect(self.choose_save)
+        button_row.addWidget(self.restore_btn)
+        button_row.addStretch()
+        button_row.addWidget(self.cancel_btn)
+        button_row.addWidget(self.save_btn)
+        panel_layout.addLayout(button_row)
+
+        layout.addWidget(panel)
+
+    def create_group_block(self, group):
+        block = QFrame()
+        block.setObjectName("aiCoreFilterGroup")
+        block_layout = QVBoxLayout(block)
+        block_layout.setContentsMargins(12, 10, 12, 10)
+        block_layout.setSpacing(8)
+
+        title_label = QLabel(group["label"])
+        title_label.setObjectName("aiCoreFilterGroupTitle")
+        block_layout.addWidget(title_label)
+
+        for column in group["columns"]:
+            self.add_field_check(block_layout, column)
+        return block
+
+    def add_field_check(self, layout, column):
+        field_name = str(column.get("name", "")).strip()
+        if not field_name:
+            return
+
+        label = str(column.get("label") or field_name)
+        check = QCheckBox(label)
+        check.setObjectName("aiCoreFieldDialogCheck")
+        check.setToolTip(field_name)
+        check.setChecked(field_name in self.core_fields or field_name in IDENTITY_FIELDS)
+        if field_name in IDENTITY_FIELDS:
+            check.setEnabled(False)
+            check.setToolTip(f"{field_name}（身份字段，始终作为核心字段发送）")
+        layout.addWidget(check)
+        self.core_field_checks[field_name] = check
+
+    def selected_fields(self):
+        return [
+            field_name
+            for field_name, check in self.core_field_checks.items()
+            if check.isChecked() or field_name in IDENTITY_FIELDS
+        ]
+
+    def choose_save(self):
+        self.action = self.SAVE_ACTION
+        self.accept()
+
+    def choose_restore_default(self):
+        self.action = self.RESTORE_DEFAULT_ACTION
+        self.accept()
+
+
 class FieldSelectionPage(QFrame):
     selection_changed = pyqtSignal(str)
     return_requested = pyqtSignal()
@@ -1206,16 +1387,18 @@ class FieldSelectionPage(QFrame):
         action_row = QHBoxLayout()
         action_row.setSpacing(8)
         self.core_btn = QPushButton("核心字段")
-        self.core_btn.setObjectName("secondaryButton")
+        self.core_btn.setObjectName("aiCoreSegmentLeft")
         self.core_config_btn = QToolButton()
-        self.core_config_btn.setObjectName("secondaryToolButton")
-        self.core_config_btn.setText("筛选")
+        self.core_config_btn.setObjectName("aiCoreSegmentRight")
+        self.core_config_btn.setText("🔍")
         self.core_config_btn.setToolTip("配置本表核心字段")
-        self.core_config_btn.setPopupMode(QToolButton.InstantPopup)
-        self.core_menu = QMenu(self)
-        self.core_menu.setObjectName("aiCoreFieldMenu")
-        self.core_menu.aboutToShow.connect(self.populate_core_field_menu)
-        self.core_config_btn.setMenu(self.core_menu)
+        self.core_button_group = QFrame()
+        self.core_button_group.setObjectName("aiCoreButtonGroup")
+        self.core_button_group_layout = QHBoxLayout(self.core_button_group)
+        self.core_button_group_layout.setContentsMargins(0, 0, 0, 0)
+        self.core_button_group_layout.setSpacing(0)
+        self.core_button_group_layout.addWidget(self.core_btn)
+        self.core_button_group_layout.addWidget(self.core_config_btn)
         self.all_btn = QPushButton("全选")
         self.all_btn.setObjectName("secondaryButton")
         self.reset_btn = QPushButton("重置")
@@ -1226,8 +1409,7 @@ class FieldSelectionPage(QFrame):
             "all": self.all_btn,
             "reset": self.reset_btn,
         }
-        action_row.addWidget(self.core_btn)
-        action_row.addWidget(self.core_config_btn)
+        action_row.addWidget(self.core_button_group)
         action_row.addWidget(self.all_btn)
         action_row.addWidget(self.reset_btn)
         action_row.addStretch()
@@ -1268,6 +1450,7 @@ class FieldSelectionPage(QFrame):
         layout.addWidget(field_scroll, 1)
 
         self.core_btn.clicked.connect(self.set_core_fields)
+        self.core_config_btn.clicked.connect(lambda _checked=False: self.open_core_field_dialog())
         self.all_btn.clicked.connect(lambda: self.set_all_fields(True))
         self.reset_btn.clicked.connect(self.reset_fields)
         self.refresh_badge()
@@ -1293,56 +1476,34 @@ class FieldSelectionPage(QFrame):
     def set_all_fields(self, checked: bool):
         self._apply_state(lambda field_name, _check: True if field_name in IDENTITY_FIELDS else bool(checked))
 
-    def populate_core_field_menu(self):
-        self.core_menu.clear()
-        self.core_field_checks = {}
+    def create_core_field_dialog(self):
         self.core_fields = core_fields_for_table(self.table_name, self.field_names)
+        dialog = CoreFieldSelectionDialog(
+            self.table_name,
+            self.table_label,
+            self._columns,
+            self.core_fields,
+            parent=self,
+        )
+        self.core_field_checks = dialog.core_field_checks
+        return dialog
 
-        for index, group in enumerate(group_columns_for_table(self.table_name, self._columns)):
-            if index:
-                self.core_menu.addSeparator()
-            title_action = self.core_menu.addAction(group["label"])
-            title_action.setEnabled(False)
-            for column in group["columns"]:
-                self._add_core_field_menu_check(column)
+    def open_core_field_dialog(self):
+        dialog = self.create_core_field_dialog()
+        try:
+            if dialog.exec_() != QDialog.Accepted:
+                return
 
-        self.core_menu.addSeparator()
-        save_action = self.core_menu.addAction("保存并应用")
-        save_action.triggered.connect(lambda _checked=False: self.save_core_fields_from_menu())
-        default_action = self.core_menu.addAction("恢复默认核心字段")
-        default_action.triggered.connect(lambda _checked=False: self.restore_default_core_fields())
+            if dialog.action == CoreFieldSelectionDialog.SAVE_ACTION:
+                self.save_core_fields_from_dialog(dialog)
+            elif dialog.action == CoreFieldSelectionDialog.RESTORE_DEFAULT_ACTION:
+                self.restore_default_core_fields()
+        finally:
+            self.core_field_checks = {}
+            dialog.deleteLater()
 
-    def _add_core_field_menu_check(self, column):
-        field_name = str(column.get("name", "")).strip()
-        if not field_name:
-            return
-
-        label = str(column.get("label") or field_name)
-        check = QCheckBox(label)
-        check.setObjectName("aiCoreFieldMenuCheck")
-        check.setToolTip(field_name)
-        check.setChecked(field_name in self.core_fields or field_name in IDENTITY_FIELDS)
-        if field_name in IDENTITY_FIELDS:
-            check.setEnabled(False)
-            check.setToolTip(f"{field_name}（身份字段，始终作为核心字段发送）")
-
-        row = QWidget(self.core_menu)
-        row_layout = QHBoxLayout(row)
-        row_layout.setContentsMargins(4, 2, 4, 2)
-        row_layout.setSpacing(0)
-        row_layout.addWidget(check)
-
-        action = QWidgetAction(self.core_menu)
-        action.setDefaultWidget(row)
-        self.core_menu.addAction(action)
-        self.core_field_checks[field_name] = check
-
-    def save_core_fields_from_menu(self):
-        selected_fields = [
-            field_name
-            for field_name, check in self.core_field_checks.items()
-            if check.isChecked() or field_name in IDENTITY_FIELDS
-        ]
+    def save_core_fields_from_dialog(self, dialog):
+        selected_fields = dialog.selected_fields()
         saved_fields = save_table_core_fields(self.table_name, selected_fields, self.field_names)
         self._apply_core_fields(saved_fields)
 
@@ -1354,10 +1515,10 @@ class FieldSelectionPage(QFrame):
         self.core_fields = set(core_fields or ())
         for block in _safe_instance_value(self, "group_blocks", []):
             block.core_fields = set(self.core_fields)
-        self._sync_core_field_menu_checks()
+        self._sync_core_field_checks()
         self._apply_state(lambda field_name, _check: field_name in self.core_fields)
 
-    def _sync_core_field_menu_checks(self):
+    def _sync_core_field_checks(self):
         for field_name, check in _safe_instance_value(self, "core_field_checks", {}).items():
             previous = check.blockSignals(True)
             try:
