@@ -3,11 +3,13 @@ import json
 import logging
 import math
 import threading
+from pathlib import Path
 
 import markdown
 from PyQt5.QtCore import QPoint, QRect, QSize, QObject, QTimer, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QButtonGroup,
+    QCheckBox,
     QComboBox,
     QDialog,
     QFrame,
@@ -15,6 +17,7 @@ from PyQt5.QtWidgets import (
     QLabel,
     QLayout,
     QLineEdit,
+    QMenu,
     QProgressBar,
     QPushButton,
     QScrollArea,
@@ -22,7 +25,9 @@ from PyQt5.QtWidgets import (
     QSplitter,
     QStackedWidget,
     QTextEdit,
+    QToolButton,
     QVBoxLayout,
+    QWidgetAction,
     QWidget,
 )
 
@@ -148,6 +153,7 @@ FIELD_GROUPS = {
 }
 OTHER_FIELD_GROUP_LABEL = "其他字段"
 
+AI_CORE_FIELDS_CONFIG_FILE = Path("ai_core_fields.json")
 MODEL_PLACEHOLDER = "未检测到可用模型"
 NAV_SIDEBAR_WIDTH = 300
 CONTEXT_PRESSURE_REFRESH_DELAY_MS = 200
@@ -313,6 +319,35 @@ QPushButton#aiFieldTag:checked {
 QPushButton#aiFieldTag:disabled {
     border-color: #D0D7DE;
     background-color: #F6F8FA;
+    color: #57606A;
+}
+QToolButton#secondaryToolButton {
+    padding: 7px 10px;
+    border: 1px solid #D0D7DE;
+    border-radius: 6px;
+    background-color: #FFFFFF;
+    color: #174A8B;
+    font-weight: bold;
+}
+QToolButton#secondaryToolButton:hover {
+    border-color: #8BB6E8;
+    background-color: #F7FBFF;
+}
+QToolButton#secondaryToolButton:disabled {
+    color: #8C959F;
+    background-color: #F6F8FA;
+    border-color: #D0D7DE;
+}
+QMenu#aiCoreFieldMenu {
+    background-color: #FFFFFF;
+    border: 1px solid #D0D7DE;
+    padding: 6px;
+}
+QCheckBox#aiCoreFieldMenuCheck {
+    color: #24292F;
+    padding: 4px 8px;
+}
+QCheckBox#aiCoreFieldMenuCheck:disabled {
     color: #57606A;
 }
 QLabel#aiModelStatus {
@@ -609,6 +644,140 @@ def reset_column_checked(field_name: str) -> bool:
     return field_name in IDENTITY_FIELDS
 
 
+def _available_field_names(available_fields) -> list:
+    names = []
+    seen = set()
+    for item in available_fields or []:
+        raw_name = item.get("name") if isinstance(item, dict) else item
+        field_name = str(raw_name or "").strip()
+        if not field_name or field_name in seen:
+            continue
+        names.append(field_name)
+        seen.add(field_name)
+    return names
+
+
+def default_core_fields_for_table(table_name: str, available_fields=None) -> set:
+    if available_fields is None:
+        return set(CORE_FIELDS.get(table_name, set())) | set(IDENTITY_FIELDS)
+
+    return {
+        field_name
+        for field_name in _available_field_names(available_fields)
+        if default_column_checked(table_name, field_name)
+    }
+
+
+def _core_fields_config_path(config_path=None) -> Path:
+    return Path(config_path) if config_path is not None else Path(AI_CORE_FIELDS_CONFIG_FILE)
+
+
+def load_core_field_overrides(config_path=None) -> dict:
+    path = _core_fields_config_path(config_path)
+    try:
+        if not path.exists():
+            return {}
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.warning("读取 AI 核心字段配置失败，已回退默认配置: %s", e)
+        return {}
+
+    if not isinstance(data, dict):
+        return {}
+
+    overrides = {}
+    for table_name, fields in data.items():
+        if not isinstance(fields, (list, tuple, set)):
+            continue
+        cleaned = []
+        seen = set()
+        for field in fields:
+            field_name = str(field or "").strip()
+            if not field_name or field_name in seen:
+                continue
+            cleaned.append(field_name)
+            seen.add(field_name)
+        if cleaned:
+            overrides[str(table_name)] = cleaned
+    return overrides
+
+
+def save_core_field_overrides(overrides: dict, config_path=None) -> bool:
+    path = _core_fields_config_path(config_path)
+    serializable = {}
+    for table_name, fields in (overrides or {}).items():
+        cleaned = []
+        seen = set()
+        for field in fields or []:
+            field_name = str(field or "").strip()
+            if not field_name or field_name in seen:
+                continue
+            cleaned.append(field_name)
+            seen.add(field_name)
+        if cleaned:
+            serializable[str(table_name)] = cleaned
+
+    try:
+        if path.parent and not path.parent.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(serializable, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return True
+    except Exception as e:
+        logger.error("保存 AI 核心字段配置失败: %s", e)
+        return False
+
+
+def normalize_core_field_selection(table_name: str, selected_fields, available_fields) -> list:
+    field_order = _available_field_names(available_fields)
+    available_set = set(field_order)
+    selected_set = {
+        str(field or "").strip()
+        for field in selected_fields or []
+        if str(field or "").strip()
+    }
+    selected_set.update(field for field in IDENTITY_FIELDS if field in available_set)
+    return [field for field in field_order if field in selected_set]
+
+
+def core_fields_for_table(table_name: str, available_fields, config_path=None) -> set:
+    field_order = _available_field_names(available_fields)
+    if not field_order:
+        return set()
+
+    overrides = load_core_field_overrides(config_path)
+    if table_name in overrides:
+        raw_fields = overrides.get(table_name) or []
+        raw_selected = {
+            str(field or "").strip()
+            for field in raw_fields
+            if str(field or "").strip()
+        }
+        has_valid_field = any(field in raw_selected for field in field_order)
+        if has_valid_field:
+            return set(normalize_core_field_selection(table_name, raw_fields, field_order))
+
+    return default_core_fields_for_table(table_name, field_order)
+
+
+def save_table_core_fields(table_name: str, selected_fields, available_fields, config_path=None) -> set:
+    normalized = normalize_core_field_selection(table_name, selected_fields, available_fields)
+    overrides = load_core_field_overrides(config_path)
+    overrides[table_name] = normalized
+    save_core_field_overrides(overrides, config_path)
+    return set(normalized)
+
+
+def restore_default_core_fields_for_table(table_name: str, available_fields, config_path=None) -> set:
+    overrides = load_core_field_overrides(config_path)
+    if table_name in overrides:
+        overrides.pop(table_name, None)
+        save_core_field_overrides(overrides, config_path)
+    return default_core_fields_for_table(table_name, available_fields)
+
+
 def _field_matches_group(field_name: str, patterns) -> bool:
     for pattern in patterns or ():
         pattern = str(pattern or "").strip()
@@ -846,11 +1015,16 @@ class FlowLayout(QLayout):
 class FieldGroupBlock(QFrame):
     selection_changed = pyqtSignal(str)
 
-    def __init__(self, table_name: str, group_label: str, columns, parent=None):
+    def __init__(self, table_name: str, group_label: str, columns, core_fields=None, parent=None):
         super().__init__(parent)
         self.table_name = table_name
         self.group_label = group_label
         self._columns = [column for column in columns if isinstance(column, dict)]
+        self.core_fields = (
+            set(core_fields)
+            if core_fields is not None
+            else default_core_fields_for_table(table_name, self._columns)
+        )
         self.checkboxes = {}
         self.action_buttons = {}
         self.setObjectName("aiFieldGroupBlock")
@@ -913,7 +1087,7 @@ class FieldGroupBlock(QFrame):
         check.setObjectName("aiFieldTag")
         check.setCheckable(True)
         check.setToolTip(field_name)
-        check.setChecked(default_column_checked(self.table_name, field_name))
+        check.setChecked(field_name in self.core_fields)
         check.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         if field_name in IDENTITY_FIELDS:
             check.setChecked(True)
@@ -988,9 +1162,12 @@ class FieldSelectionPage(QFrame):
         self.table_label = table_label
         self.row_count = int(row_count)
         self._columns = [column for column in columns if isinstance(column, dict)]
+        self.field_names = _available_field_names(self._columns)
+        self.core_fields = core_fields_for_table(table_name, self.field_names)
         self.checkboxes = {}
         self.group_blocks = []
         self.action_buttons = {}
+        self.core_field_checks = {}
         self.setObjectName("aiFieldSelectionPage")
 
         layout = QVBoxLayout(self)
@@ -1030,16 +1207,27 @@ class FieldSelectionPage(QFrame):
         action_row.setSpacing(8)
         self.core_btn = QPushButton("核心字段")
         self.core_btn.setObjectName("secondaryButton")
+        self.core_config_btn = QToolButton()
+        self.core_config_btn.setObjectName("secondaryToolButton")
+        self.core_config_btn.setText("筛选")
+        self.core_config_btn.setToolTip("配置本表核心字段")
+        self.core_config_btn.setPopupMode(QToolButton.InstantPopup)
+        self.core_menu = QMenu(self)
+        self.core_menu.setObjectName("aiCoreFieldMenu")
+        self.core_menu.aboutToShow.connect(self.populate_core_field_menu)
+        self.core_config_btn.setMenu(self.core_menu)
         self.all_btn = QPushButton("全选")
         self.all_btn.setObjectName("secondaryButton")
         self.reset_btn = QPushButton("重置")
         self.reset_btn.setObjectName("secondaryButton")
         self.action_buttons = {
             "core": self.core_btn,
+            "core_config": self.core_config_btn,
             "all": self.all_btn,
             "reset": self.reset_btn,
         }
         action_row.addWidget(self.core_btn)
+        action_row.addWidget(self.core_config_btn)
         action_row.addWidget(self.all_btn)
         action_row.addWidget(self.reset_btn)
         action_row.addStretch()
@@ -1065,6 +1253,7 @@ class FieldSelectionPage(QFrame):
                 table_name=table_name,
                 group_label=group["label"],
                 columns=group["columns"],
+                core_fields=self.core_fields,
                 parent=self,
             )
             block.selection_changed.connect(self._handle_selection_changed)
@@ -1104,10 +1293,80 @@ class FieldSelectionPage(QFrame):
     def set_all_fields(self, checked: bool):
         self._apply_state(lambda field_name, _check: True if field_name in IDENTITY_FIELDS else bool(checked))
 
+    def populate_core_field_menu(self):
+        self.core_menu.clear()
+        self.core_field_checks = {}
+        self.core_fields = core_fields_for_table(self.table_name, self.field_names)
+
+        for index, group in enumerate(group_columns_for_table(self.table_name, self._columns)):
+            if index:
+                self.core_menu.addSeparator()
+            title_action = self.core_menu.addAction(group["label"])
+            title_action.setEnabled(False)
+            for column in group["columns"]:
+                self._add_core_field_menu_check(column)
+
+        self.core_menu.addSeparator()
+        save_action = self.core_menu.addAction("保存并应用")
+        save_action.triggered.connect(lambda _checked=False: self.save_core_fields_from_menu())
+        default_action = self.core_menu.addAction("恢复默认核心字段")
+        default_action.triggered.connect(lambda _checked=False: self.restore_default_core_fields())
+
+    def _add_core_field_menu_check(self, column):
+        field_name = str(column.get("name", "")).strip()
+        if not field_name:
+            return
+
+        label = str(column.get("label") or field_name)
+        check = QCheckBox(label)
+        check.setObjectName("aiCoreFieldMenuCheck")
+        check.setToolTip(field_name)
+        check.setChecked(field_name in self.core_fields or field_name in IDENTITY_FIELDS)
+        if field_name in IDENTITY_FIELDS:
+            check.setEnabled(False)
+            check.setToolTip(f"{field_name}（身份字段，始终作为核心字段发送）")
+
+        row = QWidget(self.core_menu)
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(4, 2, 4, 2)
+        row_layout.setSpacing(0)
+        row_layout.addWidget(check)
+
+        action = QWidgetAction(self.core_menu)
+        action.setDefaultWidget(row)
+        self.core_menu.addAction(action)
+        self.core_field_checks[field_name] = check
+
+    def save_core_fields_from_menu(self):
+        selected_fields = [
+            field_name
+            for field_name, check in self.core_field_checks.items()
+            if check.isChecked() or field_name in IDENTITY_FIELDS
+        ]
+        saved_fields = save_table_core_fields(self.table_name, selected_fields, self.field_names)
+        self._apply_core_fields(saved_fields)
+
+    def restore_default_core_fields(self):
+        default_fields = restore_default_core_fields_for_table(self.table_name, self.field_names)
+        self._apply_core_fields(default_fields)
+
+    def _apply_core_fields(self, core_fields):
+        self.core_fields = set(core_fields or ())
+        for block in _safe_instance_value(self, "group_blocks", []):
+            block.core_fields = set(self.core_fields)
+        self._sync_core_field_menu_checks()
+        self._apply_state(lambda field_name, _check: field_name in self.core_fields)
+
+    def _sync_core_field_menu_checks(self):
+        for field_name, check in _safe_instance_value(self, "core_field_checks", {}).items():
+            previous = check.blockSignals(True)
+            try:
+                check.setChecked(field_name in self.core_fields or field_name in IDENTITY_FIELDS)
+            finally:
+                check.blockSignals(previous)
+
     def set_core_fields(self):
-        self._apply_state(
-            lambda field_name, _check: True if field_name in IDENTITY_FIELDS else default_column_checked(self.table_name, field_name)
-        )
+        self._apply_core_fields(core_fields_for_table(self.table_name, self.field_names))
 
     def reset_fields(self):
         self._apply_state(

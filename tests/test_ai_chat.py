@@ -1,5 +1,8 @@
 import inspect
+import json
 import os
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -12,11 +15,14 @@ from services.ai_direct import ask_model, build_messages
 from ui.ai_chat import (
     AIChatDialog,
     AIWorker,
+    CORE_FIELDS,
     FieldSelectionPage,
     MODEL_PLACEHOLDER,
+    core_fields_for_table,
     filter_analysis_payload_by_columns,
     group_columns_for_table,
     render_message_html,
+    save_table_core_fields,
 )
 from ui.main_window import MainWindow
 from ui.query import QueryTab, build_ai_analysis_payload
@@ -205,6 +211,16 @@ class TestAIChatDialogBehavior(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
+    def setUp(self):
+        self._config_dir = tempfile.TemporaryDirectory()
+        self.core_config_path = Path(self._config_dir.name) / "ai_core_fields.json"
+        self._core_config_patch = patch("ui.ai_chat.AI_CORE_FIELDS_CONFIG_FILE", self.core_config_path)
+        self._core_config_patch.start()
+
+    def tearDown(self):
+        self._core_config_patch.stop()
+        self._config_dir.cleanup()
+
     def make_dialog(self):
         dialog = AIChatDialog.__new__(AIChatDialog)
         dialog.analysis_payload = payload()
@@ -301,6 +317,70 @@ class TestAIChatDialogBehavior(unittest.TestCase):
         self.assertEqual(["sequence"], group_fields["基础身份信息"])
         self.assertEqual(["assessment_0"], group_fields["学历与考核奖惩"])
         self.assertEqual(["department"], group_fields["其他字段"])
+
+    def test_core_fields_fall_back_to_static_defaults_without_config(self):
+        fields = core_fields_for_table(
+            "base_info",
+            ["sequence", "name", "department", "current_grade", "assessment_0"],
+        )
+
+        self.assertIn("current_grade", CORE_FIELDS["base_info"])
+        self.assertEqual({"sequence", "name", "current_grade", "assessment_0"}, fields)
+
+    def test_core_fields_ignore_invalid_stored_config(self):
+        self.core_config_path.write_text(
+            json.dumps({"base_info": ["missing_field"]}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+        fields = core_fields_for_table(
+            "base_info",
+            ["sequence", "name", "department", "current_grade"],
+        )
+
+        self.assertEqual({"sequence", "name", "current_grade"}, fields)
+
+    def test_saved_core_fields_are_loaded_and_applied_by_new_page(self):
+        available = ["sequence", "name", "department", "current_grade"]
+        saved = save_table_core_fields("base_info", ["department", "missing_field"], available)
+
+        page = self.build_page(self.make_dialog())
+
+        self.assertEqual({"sequence", "name", "department"}, saved)
+        self.assertTrue(page.checkboxes["sequence"].isChecked())
+        self.assertTrue(page.checkboxes["name"].isChecked())
+        self.assertTrue(page.checkboxes["department"].isChecked())
+        self.assertFalse(page.checkboxes["current_grade"].isChecked())
+
+        page.set_all_fields(False)
+        page.set_core_fields()
+
+        self.assertTrue(page.checkboxes["department"].isChecked())
+        self.assertFalse(page.checkboxes["current_grade"].isChecked())
+        stored = json.loads(self.core_config_path.read_text(encoding="utf-8"))
+        self.assertEqual(["sequence", "name", "department"], stored["base_info"])
+
+    def test_core_field_menu_saves_and_restores_defaults(self):
+        page = self.build_page(self.make_dialog())
+
+        page.populate_core_field_menu()
+        self.assertIs(page.core_config_btn.menu(), page.core_menu)
+        self.assertIn("department", page.core_field_checks)
+        self.assertFalse(page.core_field_checks["sequence"].isEnabled())
+
+        page.core_field_checks["department"].setChecked(True)
+        page.core_field_checks["current_grade"].setChecked(False)
+        page.save_core_fields_from_menu()
+
+        self.assertTrue(page.checkboxes["department"].isChecked())
+        self.assertFalse(page.checkboxes["current_grade"].isChecked())
+
+        page.restore_default_core_fields()
+
+        self.assertFalse(page.checkboxes["department"].isChecked())
+        self.assertTrue(page.checkboxes["current_grade"].isChecked())
+        stored = json.loads(self.core_config_path.read_text(encoding="utf-8"))
+        self.assertNotIn("base_info", stored)
 
     def test_field_page_uses_group_blocks_and_global_actions(self):
         page = FieldSelectionPage(
@@ -462,6 +542,7 @@ class TestAIChatDialogBehavior(unittest.TestCase):
         self.assertFalse(dialog.chat_nav_btn.enabled)
         self.assertFalse(dialog.table_nav_buttons["base_info"].enabled)
         self.assertFalse(page.core_btn.isEnabled())
+        self.assertFalse(page.core_config_btn.isEnabled())
         self.assertFalse(page.all_btn.isEnabled())
         self.assertFalse(page.reset_btn.isEnabled())
         self.assertFalse(page.group_blocks[0].all_btn.isEnabled())
