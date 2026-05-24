@@ -124,6 +124,11 @@ class FakeDialog:
         self.closed = False
         self.title = ""
         self.shown = False
+        self.is_inference_running = False
+        self.sync_started = False
+        self.sync_deferred = False
+        self.applied_payload = None
+        self.sync_error = None
 
     def close(self):
         self.closed = True
@@ -133,6 +138,18 @@ class FakeDialog:
 
     def show(self):
         self.shown = True
+
+    def begin_payload_sync(self):
+        self.sync_started = True
+
+    def mark_payload_sync_deferred(self):
+        self.sync_deferred = True
+
+    def apply_analysis_payload(self, analysis_payload):
+        self.applied_payload = analysis_payload
+
+    def fail_payload_sync(self, message):
+        self.sync_error = message
 
 
 class FakeDb:
@@ -747,6 +764,15 @@ class TestAIChatDialogBehavior(unittest.TestCase):
         self.assertEqual("将发送2个表/6列", dialog.column_summary_label.text)
         self.assertTrue(dialog.send_btn.enabled)
 
+    def test_empty_selected_rows_disable_send(self):
+        dialog = self.make_dialog()
+        dialog.analysis_payload["tables"]["base_info"]["rows"] = []
+        self.build_page(dialog)
+
+        dialog.update_action_state()
+
+        self.assertFalse(dialog.send_btn.enabled)
+
     def test_selected_analysis_payload_uses_cache_until_selection_changes(self):
         dialog = self.make_dialog()
         page = self.build_page(dialog)
@@ -808,6 +834,44 @@ class TestAIChatDialogBehavior(unittest.TestCase):
             self.assertNotIn("▾", dialog.context_combo.currentText())
             self.assertGreater(dialog.context_combo.count(), 0)
             self.assertTrue(dialog.context_reason_label.wordWrap())
+        finally:
+            dialog.close()
+
+    def test_apply_analysis_payload_refreshes_rows_and_preserves_chat_selection(self):
+        with patch("ui.ai_chat.fetch_ollama_models", return_value=(True, ["qwen2:latest"])):
+            dialog = AIChatDialog(payload())
+        try:
+            dialog.history_messages = [{"role": "user", "content": "按部门汇总"}]
+            dialog.table_pages["base_info"].checkboxes["department"].setChecked(True)
+            dialog.table_pages["base_info"].checkboxes["current_grade"].setChecked(True)
+            dialog.enabled_tables["rewards"] = False
+
+            updated_payload = payload()
+            updated_payload["schemas"]["base_info"]["columns"] = [
+                {"name": "sequence", "label": "序号"},
+                {"name": "name", "label": "姓名"},
+                {"name": "department", "label": "部门"},
+            ]
+            updated_payload["tables"]["base_info"]["field_labels"] = {
+                "sequence": "序号",
+                "name": "姓名",
+                "department": "部门",
+            }
+            updated_payload["tables"]["base_info"]["rows"] = [
+                {"sequence": 3, "name": "王五", "department": "研发部"},
+            ]
+
+            dialog.begin_payload_sync()
+            self.assertFalse(dialog.send_btn.isEnabled())
+
+            dialog.apply_analysis_payload(updated_payload)
+
+            self.assertEqual([{"role": "user", "content": "按部门汇总"}], dialog.history_messages)
+            self.assertEqual(1, dialog.table_pages["base_info"].row_count)
+            self.assertTrue(dialog.column_checks["base_info"]["department"].isChecked())
+            self.assertNotIn("current_grade", dialog.column_checks["base_info"])
+            self.assertFalse(dialog.enabled_tables["rewards"])
+            self.assertIn("后续问题将基于最新查询结果", dialog.status_label.text())
         finally:
             dialog.close()
 
@@ -874,6 +938,25 @@ class TestAIChatDialogBehavior(unittest.TestCase):
         self.assertFalse(page.reset_btn.isEnabled())
         self.assertFalse(page.group_blocks[0].all_btn.isEnabled())
         self.assertFalse(page.group_blocks[0].reset_btn.isEnabled())
+
+    def test_global_controls_disable_during_payload_sync(self):
+        dialog = self.make_dialog()
+        page = self.build_page(dialog)
+        dialog.is_payload_syncing = True
+
+        dialog.update_action_state()
+
+        self.assertFalse(dialog.send_btn.enabled)
+        self.assertFalse(dialog.input_field.enabled)
+        self.assertFalse(dialog.model_combo.enabled)
+        self.assertFalse(dialog.refresh_btn.enabled)
+        self.assertFalse(dialog.clear_btn.enabled)
+        self.assertFalse(dialog.chat_nav_btn.enabled)
+        self.assertFalse(dialog.table_nav_buttons["base_info"].enabled)
+        self.assertFalse(page.core_btn.isEnabled())
+        self.assertFalse(page.core_config_btn.isEnabled())
+        self.assertFalse(page.all_btn.isEnabled())
+        self.assertFalse(page.reset_btn.isEnabled())
 
 
 class AIChatDirectModelTests(unittest.TestCase):
@@ -1023,22 +1106,25 @@ class AIChatDirectModelTests(unittest.TestCase):
             QueryTab.open_ai_chat(tab)
 
         build_payload.assert_called_once_with({})
-        ensure_ready.assert_called_once_with(start_if_needed=False)
+        ensure_ready.assert_called_once_with(start_if_needed=True)
         open_dialog.assert_called_once()
         start_then_open.assert_not_called()
 
-    def test_open_ai_chat_uses_progress_task_when_ollama_not_ready(self):
+    def test_open_ai_chat_warns_when_combined_ollama_start_fails(self):
         tab = self.make_query_tab_stub()
 
         with patch.object(QueryTab, "open_ai_dialog") as open_dialog, \
                 patch.object(QueryTab, "start_ollama_then_open_ai") as start_then_open, \
                 patch.object(QueryTab, "build_full_ai_analysis_payload", return_value=payload()) as build_payload, \
-                patch("ui.query.ensure_ollama_ready", return_value=FakeOllamaStatus(False)):
+                patch("ui.query.ensure_ollama_ready", return_value=FakeOllamaStatus(False)) as ensure_ready, \
+                patch("ui.query.QMessageBox.warning") as warning:
             QueryTab.open_ai_chat(tab)
 
         build_payload.assert_called_once_with({})
+        ensure_ready.assert_called_once_with(start_if_needed=True)
         open_dialog.assert_not_called()
-        start_then_open.assert_called_once()
+        start_then_open.assert_not_called()
+        warning.assert_called_once()
 
     def test_open_ai_chat_uses_background_task_for_full_payload(self):
         tab = self.make_query_tab_stub()
@@ -1060,14 +1146,19 @@ class AIChatDirectModelTests(unittest.TestCase):
 
         tab.window = lambda: FakeMainWindow()
 
-        with patch.object(QueryTab, "handle_ai_analysis_payload") as handle_payload, \
-                patch.object(QueryTab, "build_full_ai_analysis_payload", return_value=payload()) as build_payload:
+        with patch.object(QueryTab, "handle_ai_runtime_result") as handle_runtime, \
+                patch.object(QueryTab, "build_full_ai_analysis_payload", return_value=payload()) as build_payload, \
+                patch("ui.query.ensure_ollama_ready", return_value=FakeOllamaStatus(True)) as ensure_ready:
             QueryTab.open_ai_chat(tab)
 
-        self.assertEqual("正在准备 AI 分析数据，请稍候...", calls["title"])
+        self.assertEqual("正在准备 AI 分析环境，请稍候...", calls["title"])
         self.assertTrue(callable(calls["progress_dialog_factory"]))
         build_payload.assert_called_once_with({})
-        handle_payload.assert_called_once_with(payload())
+        ensure_ready.assert_called_once_with(start_if_needed=True)
+        handle_runtime.assert_called_once()
+        runtime_result = handle_runtime.call_args.args[0]
+        self.assertEqual(payload(), runtime_result["analysis_payload"])
+        self.assertTrue(runtime_result["ollama_status"].service_available)
 
     def test_open_ai_chat_requires_query_rows_before_ollama_check(self):
         tab = self.make_query_tab_stub()
@@ -1083,6 +1174,77 @@ class AIChatDirectModelTests(unittest.TestCase):
         open_dialog.assert_not_called()
         start_then_open.assert_not_called()
         warning.assert_called_once()
+
+    def test_prepare_ai_chat_runtime_skips_ollama_when_payload_has_no_rows(self):
+        tab = self.make_query_tab_stub()
+        empty_payload = payload()
+        for table in empty_payload["tables"].values():
+            table["rows"] = []
+
+        with patch.object(QueryTab, "build_full_ai_analysis_payload", return_value=empty_payload) as build_payload, \
+                patch("ui.query.ensure_ollama_ready") as ensure_ready:
+            result = QueryTab.prepare_ai_chat_runtime(tab, {})
+
+        build_payload.assert_called_once_with({})
+        ensure_ready.assert_not_called()
+        self.assertEqual(empty_payload, result["analysis_payload"])
+        self.assertIsNone(result["ollama_status"])
+
+    def test_sync_open_ai_dialog_rebuilds_payload_with_latest_conditions(self):
+        tab = self.make_query_tab_stub()
+        dialog = FakeDialog()
+        tab.ai_dialog = dialog
+        tab._ai_sync_generation = 0
+        new_payload = payload()
+
+        def run_sync(task_fn, on_success=None, on_error=None):
+            on_success(task_fn())
+
+        tab._run_ai_sync_worker = run_sync
+
+        with patch.object(QueryTab, "build_full_ai_analysis_payload", return_value=new_payload) as build_payload:
+            synced = QueryTab.sync_open_ai_dialog(tab, {"name": "张三"})
+
+        self.assertTrue(synced)
+        self.assertTrue(dialog.sync_started)
+        self.assertIs(dialog.applied_payload, new_payload)
+        build_payload.assert_called_once_with({"name": "张三"})
+
+    def test_sync_open_ai_dialog_defers_while_inference_running(self):
+        tab = self.make_query_tab_stub()
+        dialog = FakeDialog()
+        dialog.is_inference_running = True
+        tab.ai_dialog = dialog
+        tab._pending_ai_sync_conditions = None
+
+        with patch.object(QueryTab, "_run_ai_sync_worker") as run_worker:
+            synced = QueryTab.sync_open_ai_dialog(tab, {"department": "研发部"})
+
+        self.assertFalse(synced)
+        self.assertTrue(dialog.sync_deferred)
+        self.assertEqual({"department": "研发部"}, tab._pending_ai_sync_conditions)
+        run_worker.assert_not_called()
+
+    def test_sync_open_ai_dialog_ignores_stale_background_result(self):
+        tab = self.make_query_tab_stub()
+        dialog = FakeDialog()
+        tab.ai_dialog = dialog
+        tab._ai_sync_generation = 0
+        callbacks = []
+
+        def run_sync(task_fn, on_success=None, on_error=None):
+            callbacks.append((task_fn, on_success))
+
+        tab._run_ai_sync_worker = run_sync
+
+        QueryTab.sync_open_ai_dialog(tab, {"name": "first"})
+        QueryTab.sync_open_ai_dialog(tab, {"name": "second"})
+
+        callbacks[0][1]({"stale": True})
+        self.assertIsNone(dialog.applied_payload)
+
+        callbacks[1][1]({"fresh": True})
+        self.assertEqual({"fresh": True}, dialog.applied_payload)
 
     def test_query_tab_page_navigation_requeries_current_table(self):
         class FakePagedDb:

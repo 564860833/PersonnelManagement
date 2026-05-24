@@ -1647,6 +1647,8 @@ class TableNavItem(QFrame):
 
 
 class AIChatDialog(QDialog):
+    payload_sync_resume_requested = pyqtSignal()
+
     def __init__(self, analysis_payload, parent=None, reference_widget=None):
         super().__init__(None)
         self.reference_widget = reference_widget or parent
@@ -1656,6 +1658,8 @@ class AIChatDialog(QDialog):
         self.history_messages = []
         self.current_context_recommendation = None
         self.is_inference_running = False
+        self.is_payload_syncing = False
+        self.is_payload_sync_deferred = False
         self.worker = None
         self.worker_thread = None
         self._pending_history_length = None
@@ -2115,7 +2119,7 @@ class AIChatDialog(QDialog):
         chat_layout.addWidget(input_panel)
         return chat_page
 
-    def build_field_pages(self):
+    def build_field_pages(self, selected_columns=None, enabled_tables=None):
         schemas = dict((self.analysis_payload or {}).get("schemas") or {})
         tables = dict((self.analysis_payload or {}).get("tables") or {})
         self.column_checks = {}
@@ -2136,9 +2140,20 @@ class AIChatDialog(QDialog):
             )
             page.selection_changed.connect(self.on_table_selection_changed)
             page.return_requested.connect(self.switch_to_chat)
+            if selected_columns and table_name in selected_columns:
+                selected_fields = set(selected_columns.get(table_name) or [])
+                for field_name, check in page.checkboxes.items():
+                    previous = check.blockSignals(True)
+                    try:
+                        check.setChecked(field_name in selected_fields or field_name in IDENTITY_FIELDS)
+                    finally:
+                        check.blockSignals(previous)
             self.table_pages[table_name] = page
             self.column_checks[table_name] = page.checkboxes
-            self.enabled_tables[table_name] = True
+            table_enabled = True
+            if enabled_tables is not None and table_name in enabled_tables:
+                table_enabled = bool(enabled_tables.get(table_name))
+            self.enabled_tables[table_name] = table_enabled
             self.workspace_stack.addWidget(page)
 
             nav_item = self.create_table_nav_item(table_name, table_label)
@@ -2146,12 +2161,111 @@ class AIChatDialog(QDialog):
             self.table_nav_items[table_name] = nav_item
             self.table_nav_buttons[table_name] = nav_button
             self.nav_button_group.addButton(nav_button)
+            nav_item.set_table_enabled(table_enabled)
             self.table_nav_layout.insertWidget(insert_index, nav_item)
             insert_index += 1
 
         self.refresh_table_navigation()
         self.refresh_column_summary()
         self.schedule_context_pressure_refresh()
+
+    def snapshot_field_selection(self) -> dict:
+        selection = {}
+        for table_name, page in _safe_instance_value(self, "table_pages", {}).items():
+            table_selection = []
+            for field_name, check in page.checkboxes.items():
+                if check.isChecked() or field_name in IDENTITY_FIELDS:
+                    table_selection.append(field_name)
+            selection[table_name] = table_selection
+        return selection
+
+    def current_field_table_name(self):
+        stack = _safe_instance_value(self, "workspace_stack")
+        if stack is None or not hasattr(stack, "currentWidget"):
+            return None
+        try:
+            current_widget = stack.currentWidget()
+        except RuntimeError:
+            return None
+        for table_name, page in _safe_instance_value(self, "table_pages", {}).items():
+            if current_widget is page:
+                return table_name
+        return None
+
+    def clear_field_pages(self):
+        stack = _safe_instance_value(self, "workspace_stack")
+        nav_layout = _safe_instance_value(self, "table_nav_layout")
+        nav_group = _safe_instance_value(self, "nav_button_group")
+
+        for page in list(_safe_instance_value(self, "table_pages", {}).values()):
+            if stack is not None and hasattr(stack, "removeWidget"):
+                stack.removeWidget(page)
+            if hasattr(page, "deleteLater"):
+                page.deleteLater()
+
+        for table_name, nav_button in list(_safe_instance_value(self, "table_nav_buttons", {}).items()):
+            if nav_group is not None and hasattr(nav_group, "removeButton"):
+                nav_group.removeButton(nav_button)
+
+        for nav_item in list(_safe_instance_value(self, "table_nav_items", {}).values()):
+            if nav_layout is not None and hasattr(nav_layout, "removeWidget"):
+                nav_layout.removeWidget(nav_item)
+            if hasattr(nav_item, "deleteLater"):
+                nav_item.deleteLater()
+
+        self.column_checks = {}
+        self.table_pages = {}
+        self.table_nav_buttons = {}
+        self.table_nav_items = {}
+        self.enabled_tables = {}
+
+    def begin_payload_sync(self):
+        self.is_payload_syncing = True
+        self.is_payload_sync_deferred = False
+        status_label = _safe_instance_value(self, "status_label")
+        if status_label is not None:
+            status_label.setText("主窗口查询结果已更新，正在同步...")
+        self.update_action_state()
+
+    def mark_payload_sync_deferred(self):
+        self.is_payload_sync_deferred = True
+        status_label = _safe_instance_value(self, "status_label")
+        if status_label is not None:
+            status_label.setText("主窗口查询结果已更新，当前分析结束后同步。")
+        self.update_action_state()
+
+    def apply_analysis_payload(self, analysis_payload):
+        selected_columns = self.snapshot_field_selection()
+        enabled_tables = dict(_safe_instance_value(self, "enabled_tables", {}) or {})
+        current_table_name = self.current_field_table_name()
+
+        self.analysis_payload = analysis_payload or {"schemas": {}, "tables": {}}
+        self.clear_field_pages()
+        self.invalidate_selection_caches()
+        self.is_payload_syncing = False
+        self.is_payload_sync_deferred = False
+        self.build_field_pages(selected_columns=selected_columns, enabled_tables=enabled_tables)
+
+        if current_table_name in _safe_instance_value(self, "table_pages", {}) and self.is_table_enabled(current_table_name):
+            self.switch_to_table(current_table_name)
+        else:
+            self.switch_to_chat()
+
+        self.refresh_context_pressure()
+        status_label = _safe_instance_value(self, "status_label")
+        if status_label is not None:
+            status_label.setText("数据已同步，后续问题将基于最新查询结果。")
+        self.update_action_state()
+
+    def fail_payload_sync(self, message):
+        self.is_payload_syncing = False
+        self.is_payload_sync_deferred = False
+        status_label = _safe_instance_value(self, "status_label")
+        if status_label is not None:
+            detail = str(message).strip()
+            suffix = f"：{detail}" if detail else ""
+            status_label.setText(f"同步失败，当前 AI 窗口仍使用上一次数据{suffix}")
+        self.update_action_state()
 
     def switch_to_chat(self):
         stack = _safe_instance_value(self, "workspace_stack")
@@ -2199,6 +2313,7 @@ class AIChatDialog(QDialog):
             return False
 
     def refresh_table_navigation(self):
+        busy = bool(_safe_instance_value(self, "is_inference_running", False) or _safe_instance_value(self, "is_payload_syncing", False))
         for table_name, page in _safe_instance_value(self, "table_pages", {}).items():
             nav_button = _safe_instance_value(self, "table_nav_buttons", {}).get(table_name)
             nav_item = _safe_instance_value(self, "table_nav_items", {}).get(table_name)
@@ -2210,10 +2325,10 @@ class AIChatDialog(QDialog):
                 total_count = page.total_count()
                 nav_button.setText(f"{page.table_label}\n已选 {selected_count}/{total_count}")
                 nav_button.setToolTip(f"{page.table_label} · {page.row_count} 行 · 已选 {selected_count}/{total_count}")
-                nav_button.setEnabled(self.is_table_enabled(table_name) and not self.is_inference_running)
+                nav_button.setEnabled(self.is_table_enabled(table_name) and not busy)
             if nav_item is not None:
                 nav_item.set_table_enabled(self.is_table_enabled(table_name))
-                nav_item.set_controls_enabled(not self.is_inference_running, self.is_table_enabled(table_name))
+                nav_item.set_controls_enabled(not busy, self.is_table_enabled(table_name))
 
     def selected_column_map(self) -> dict:
         schemas = dict((self.analysis_payload or {}).get("schemas") or {})
@@ -2296,8 +2411,8 @@ class AIChatDialog(QDialog):
         return self._selected_payload_cache
 
     def has_selected_analysis_payload(self) -> bool:
-        table_count, column_count, _ = self.selected_payload_stats()
-        return table_count > 0 and column_count > 0
+        table_count, column_count, row_count = self.selected_payload_stats()
+        return table_count > 0 and column_count > 0 and row_count > 0
 
     def refresh_column_summary(self):
         column_summary_label = _safe_instance_value(self, "column_summary_label")
@@ -2328,7 +2443,7 @@ class AIChatDialog(QDialog):
             self.update_action_state()
             return
 
-        if self.is_inference_running:
+        if self.is_inference_running or _safe_instance_value(self, "is_payload_syncing", False):
             return
 
         if not self.has_selected_analysis_payload():
@@ -2390,38 +2505,48 @@ class AIChatDialog(QDialog):
         self.is_inference_running = False
         self.worker = None
         self.set_model_status("ready" if self.selected_model_name() else "warning", self.model_ready_text())
+        if _safe_instance_value(self, "is_payload_sync_deferred", False):
+            self.is_payload_sync_deferred = False
+            self.status_label.setText("主窗口查询结果已更新，正在同步...")
+            self.update_action_state()
+            try:
+                self.payload_sync_resume_requested.emit()
+            except RuntimeError:
+                logger.debug("AI payload sync resume signal could not be emitted", exc_info=True)
+            return
         self.status_label.setText(status_text)
         self.update_action_state()
 
     def update_action_state(self):
         has_model = bool(self.selected_model_name())
         has_selected_payload = self.has_selected_analysis_payload()
+        busy = bool(_safe_instance_value(self, "is_inference_running", False) or _safe_instance_value(self, "is_payload_syncing", False))
         send_btn = _safe_instance_value(self, "send_btn")
         input_field = _safe_instance_value(self, "input_field")
         model_combo = _safe_instance_value(self, "model_combo")
         refresh_btn = _safe_instance_value(self, "refresh_btn")
         clear_btn = _safe_instance_value(self, "clear_btn")
         if send_btn is not None:
-            send_btn.setEnabled(has_model and has_selected_payload and not self.is_inference_running)
+            send_btn.setEnabled(has_model and has_selected_payload and not busy)
         if input_field is not None:
-            input_field.setEnabled(not self.is_inference_running)
+            input_field.setEnabled(not busy)
         if model_combo is not None:
-            model_combo.setEnabled(not self.is_inference_running)
+            model_combo.setEnabled(not busy)
         if refresh_btn is not None:
-            refresh_btn.setEnabled(not self.is_inference_running)
+            refresh_btn.setEnabled(not busy)
         if clear_btn is not None:
-            clear_btn.setEnabled(not self.is_inference_running)
+            clear_btn.setEnabled(not busy)
         if _safe_instance_value(self, "chat_nav_btn") is not None:
-            _safe_instance_value(self, "chat_nav_btn").setEnabled(not self.is_inference_running)
+            _safe_instance_value(self, "chat_nav_btn").setEnabled(not busy)
         for table_name, nav_button in _safe_instance_value(self, "table_nav_buttons", {}).items():
-            nav_button.setEnabled(not self.is_inference_running and self.is_table_enabled(table_name))
+            nav_button.setEnabled(not busy and self.is_table_enabled(table_name))
         for table_name, nav_item in _safe_instance_value(self, "table_nav_items", {}).items():
-            nav_item.set_controls_enabled(not self.is_inference_running, self.is_table_enabled(table_name))
+            nav_item.set_controls_enabled(not busy, self.is_table_enabled(table_name))
         for page in _safe_instance_value(self, "table_pages", {}).values():
             for field_name, check in page.checkboxes.items():
-                check.setEnabled(field_name not in IDENTITY_FIELDS and not self.is_inference_running)
+                check.setEnabled(field_name not in IDENTITY_FIELDS and not busy)
             for button in page.action_buttons.values():
-                button.setEnabled(not self.is_inference_running)
+                button.setEnabled(not busy)
 
     def selected_model_name(self) -> str:
         model_name = self.model_combo.currentText().strip()

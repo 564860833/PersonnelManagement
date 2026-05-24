@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import (
     QCheckBox, QDialogButtonBox,
     QScrollArea, QAbstractItemView, QGridLayout, QSizePolicy, QStackedWidget
 )
-from PyQt5.QtCore import Qt, QSignalBlocker, pyqtSignal
+from PyQt5.QtCore import Qt, QSignalBlocker, QThread, pyqtSignal
 from PyQt5.QtGui import QColor, QFont
 from core.database import Database
 from config import config
@@ -39,9 +39,18 @@ from ui.styles import (
     button_style,
 )
 from ui.table_model import ResultTableModel
+from ui.worker import Worker, WorkerResultHandler
 from services.ollama_manager import ensure_ollama_ready
 
 logger = logging.getLogger('QueryTab')
+
+
+def _safe_instance_attr(obj, name: str, default=None):
+    try:
+        instance_dict = object.__getattribute__(obj, "__dict__")
+    except Exception:
+        return default
+    return instance_dict.get(name, default)
 
 
 def build_ai_analysis_payload(results_dict: dict, permissions: dict, assessment_years=None) -> dict:
@@ -665,6 +674,9 @@ class QueryTab(QWidget):
         self.current_results_dict = {}  # 保存当前页查询结果
         self.current_total_counts = {}
         self._last_query_conditions = None
+        self._ai_sync_generation = 0
+        self._pending_ai_sync_conditions = None
+        self._ai_sync_tasks = []
         self.current_table_name = 'base_info'
         self._query_state = {}
         self._restoring_query_state = False
@@ -1096,6 +1108,31 @@ class QueryTab(QWidget):
         finally:
             db.close()
 
+    def prepare_ai_chat_runtime(self, query_conditions=None):
+        """Prepare AI data, then check/start Ollama only when there are rows."""
+        analysis_payload = self.build_full_ai_analysis_payload(query_conditions)
+        if not analysis_payload.get("schemas") or not has_analysis_rows(analysis_payload):
+            return {
+                "analysis_payload": analysis_payload,
+                "ollama_status": None,
+            }
+        return {
+            "analysis_payload": analysis_payload,
+            "ollama_status": ensure_ollama_ready(start_if_needed=True),
+        }
+
+    def validate_ai_analysis_payload(self, analysis_payload):
+        """Return whether an AI payload can open the analysis window."""
+        if not (analysis_payload or {}).get("schemas"):
+            QMessageBox.warning(self, "提示", "当前用户没有可用于 AI 分析的数据表权限。")
+            return False
+
+        if not has_analysis_rows(analysis_payload):
+            QMessageBox.warning(self, "提示", "请先查询或查看全部后再使用 AI 分析。")
+            return False
+
+        return True
+
     def get_full_table_rows(self, table_name: str, query_conditions=None):
         """按最后一次查询条件获取指定表的全量匹配记录。"""
         conditions = self._snapshot_query_conditions(query_conditions)
@@ -1202,7 +1239,9 @@ class QueryTab(QWidget):
             self.current_total_counts = {}
             self.current_results_dict = {}
             self.current_results = []
-            self.load_table_page('base_info', 1, query_conditions=query_conditions)
+            loaded = self.load_table_page('base_info', 1, query_conditions=query_conditions)
+            if loaded:
+                self.sync_open_ai_dialog(query_conditions)
 
             total_count = self.current_total_counts.get('base_info', 0)
             self.show_status_message(f"查看全部完成：共找到 {total_count} 条基础信息记录")
@@ -1217,7 +1256,9 @@ class QueryTab(QWidget):
             self.current_total_counts = {}
             self.current_results_dict = {}
             self.current_results = []
-            self.load_table_page('base_info', 1, query_conditions=query_conditions)
+            loaded = self.load_table_page('base_info', 1, query_conditions=query_conditions)
+            if loaded:
+                self.sync_open_ai_dialog(query_conditions)
 
             total_count = self.current_total_counts.get('base_info', 0)
             self.show_status_message(f"查询完成：找到 {total_count} 条基础信息记录")
@@ -1256,15 +1297,122 @@ class QueryTab(QWidget):
             return
 
         try:
-            status = ensure_ollama_ready(start_if_needed=False)
-            if status.service_available:
-                self.open_ai_dialog(analysis_payload)
-            else:
-                self.start_ollama_then_open_ai(analysis_payload)
-
+            self.open_ai_dialog(analysis_payload)
+            return True
         except Exception as e:
             logger.exception("AI Dialog Error")
             QMessageBox.critical(self, "组件错误", f"无法打开 AI 窗口：\n{e}")
+            return False
+
+    def handle_ai_runtime_result(self, runtime_result):
+        """Handle the combined AI data preparation and Ollama readiness result."""
+        analysis_payload = (runtime_result or {}).get("analysis_payload")
+        if not self.validate_ai_analysis_payload(analysis_payload):
+            return
+
+        status = (runtime_result or {}).get("ollama_status")
+        if getattr(status, "service_available", False):
+            self.open_ai_dialog(analysis_payload)
+            return
+
+        message = getattr(status, "message", "Ollama 未能启动或连接。")
+        QMessageBox.warning(self, "Ollama 启动提示", message)
+
+    def _run_ai_sync_worker(self, task_fn, on_success=None, on_error=None):
+        """Run an AI-data sync task without showing a modal progress dialog."""
+        if _safe_instance_attr(self, "_ai_sync_tasks") is None:
+            self._ai_sync_tasks = []
+
+        thread = QThread(self)
+        worker = Worker(task_fn)
+        worker.moveToThread(thread)
+
+        task_ref = {
+            "thread": thread,
+            "worker": worker,
+        }
+
+        def cleanup():
+            handler.deleteLater()
+            sync_tasks = _safe_instance_attr(self, "_ai_sync_tasks", [])
+            if task_ref in sync_tasks:
+                sync_tasks.remove(task_ref)
+
+        handler = WorkerResultHandler(
+            on_success=on_success,
+            on_error=on_error,
+            on_done=cleanup,
+            parent=self,
+        )
+        task_ref["handler"] = handler
+        _safe_instance_attr(self, "_ai_sync_tasks", []).append(task_ref)
+
+        thread.started.connect(worker.run)
+        worker.finished.connect(handler.handle_finished)
+        worker.failed.connect(handler.handle_failed)
+        worker.done.connect(handler.handle_done)
+        worker.done.connect(worker.deleteLater)
+        worker.done.connect(thread.quit)
+        thread.finished.connect(thread.deleteLater)
+        thread.start()
+
+    def sync_open_ai_dialog(self, query_conditions=None):
+        """Sync the open AI dialog with the latest successful main-window query."""
+        dialog = _safe_instance_attr(self, "ai_dialog")
+        if dialog is None:
+            return False
+
+        conditions = self._snapshot_query_conditions(query_conditions)
+        if conditions is None:
+            return False
+
+        if getattr(dialog, "is_inference_running", False):
+            self._pending_ai_sync_conditions = dict(conditions)
+            if hasattr(dialog, "mark_payload_sync_deferred"):
+                dialog.mark_payload_sync_deferred()
+            return False
+
+        self._pending_ai_sync_conditions = None
+        self._ai_sync_generation = _safe_instance_attr(self, "_ai_sync_generation", 0) + 1
+        generation = self._ai_sync_generation
+
+        if hasattr(dialog, "begin_payload_sync"):
+            dialog.begin_payload_sync()
+
+        def task():
+            return self.build_full_ai_analysis_payload(conditions)
+
+        def on_success(analysis_payload):
+            if generation != _safe_instance_attr(self, "_ai_sync_generation", 0):
+                return
+            current_dialog = _safe_instance_attr(self, "ai_dialog")
+            if current_dialog is not dialog:
+                return
+            if hasattr(current_dialog, "apply_analysis_payload"):
+                current_dialog.apply_analysis_payload(analysis_payload)
+            else:
+                current_dialog.analysis_payload = analysis_payload
+
+        def on_error(message):
+            if generation != _safe_instance_attr(self, "_ai_sync_generation", 0):
+                return
+            current_dialog = _safe_instance_attr(self, "ai_dialog")
+            if current_dialog is not dialog:
+                return
+            logger.error("AI data sync failed: %s", message)
+            if hasattr(current_dialog, "fail_payload_sync"):
+                current_dialog.fail_payload_sync(message)
+
+        self._run_ai_sync_worker(task, on_success=on_success, on_error=on_error)
+        return True
+
+    def run_pending_ai_sync(self):
+        """Run the latest sync that was deferred while AI inference was active."""
+        conditions = _safe_instance_attr(self, "_pending_ai_sync_conditions")
+        if conditions is None:
+            return False
+        self._pending_ai_sync_conditions = None
+        return self.sync_open_ai_dialog(conditions)
 
     def open_ai_chat(self):
         """
@@ -1279,10 +1427,10 @@ class QueryTab(QWidget):
             main_window = self.window()
 
             def task():
-                return self.build_full_ai_analysis_payload(query_conditions)
+                return self.prepare_ai_chat_runtime(query_conditions)
 
-            def on_success(analysis_payload):
-                self.handle_ai_analysis_payload(analysis_payload)
+            def on_success(runtime_result):
+                self.handle_ai_runtime_result(runtime_result)
 
             def on_error(message):
                 QMessageBox.critical(self, "AI 分析准备失败", message)
@@ -1293,13 +1441,13 @@ class QueryTab(QWidget):
                 def progress_dialog_factory(parent, _title):
                     return ModernLoadingDialog(
                         parent,
-                        title="正在准备 AI 分析数据",
-                        message="正在读取当前条件下的全部可分析数据，请稍候...",
+                        title="正在准备 AI 分析环境",
+                        message="正在读取当前条件下的全部可分析数据，并检查或启动本地 AI 服务，请稍候...",
                         icon_kind="ai",
                     )
 
                 main_window.run_background_task(
-                    "正在准备 AI 分析数据，请稍候...",
+                    "正在准备 AI 分析环境，请稍候...",
                     task,
                     on_success=on_success,
                     on_error=on_error,
@@ -1362,16 +1510,26 @@ class QueryTab(QWidget):
 
         from ui.ai_chat import AIChatDialog
         self.ai_dialog = AIChatDialog(analysis_payload, reference_widget=self)
-        self.ai_dialog.destroyed.connect(lambda _obj=None: setattr(self, "ai_dialog", None))
+        self.ai_dialog.destroyed.connect(lambda _obj=None: self._on_ai_dialog_destroyed())
+        if hasattr(self.ai_dialog, "payload_sync_resume_requested"):
+            self.ai_dialog.payload_sync_resume_requested.connect(self.run_pending_ai_sync)
         self.ai_dialog.setWindowTitle("智能分析 - 查询结果")
         self.ai_dialog.show()
 
+    def _on_ai_dialog_destroyed(self):
+        """Clear AI dialog references and pending sync state."""
+        self.ai_dialog = None
+        self._pending_ai_sync_conditions = None
+        self._ai_sync_generation = _safe_instance_attr(self, "_ai_sync_generation", 0) + 1
+
     def close_ai_dialog(self):
         """Close the independent AI analysis window if it is open."""
-        if getattr(self, "ai_dialog", None) is None:
+        if _safe_instance_attr(self, "ai_dialog") is None:
             return
-        dialog = self.ai_dialog
+        dialog = _safe_instance_attr(self, "ai_dialog")
         self.ai_dialog = None
+        self._pending_ai_sync_conditions = None
+        self._ai_sync_generation = _safe_instance_attr(self, "_ai_sync_generation", 0) + 1
         dialog.close()
 
     def show_table_data(self, table_name: str):
