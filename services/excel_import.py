@@ -274,6 +274,17 @@ def prepare_import_preview(file_path: str, db_path: str, table_name: str) -> dic
                 "assessment_years": assessment_years,
             }
 
+        if table_name == "base_info":
+            duplicate_keys, duplicate_samples = db._find_duplicate_base_person_keys_in_records(records)
+            if duplicate_keys:
+                return {
+                    "success": False,
+                    "message": db._format_duplicate_base_person_message(duplicate_samples),
+                    "records": [],
+                    "duplicate_keys": [],
+                    "assessment_years": assessment_years,
+                }
+
         unresolved = []
         if table_name in {"rewards", "family", "resume"}:
             for index, record in enumerate(records, start=1):
@@ -318,19 +329,35 @@ def import_prepared_records(
         db_path: str,
         table_name: str,
         records: List[Dict[str, Any]],
-        assessment_years=None,
-        overwrite: bool = False
+        assessment_years=None
 ) -> dict:
     """将已解析的记录写入数据库，供后台线程调用。"""
     db = Database(db_path)
     try:
+        skipped_duplicate_related_rows = 0
         if table_name in RELATED_TABLES:
             records = db._normalize_import_rows(table_name, records)
             if not records:
                 return {"success": False, "message": f"{TABLE_LABELS[table_name]}中未找到有效明细记录"}
 
-        if overwrite and table_name != 'base_info' and not db.clear_table_data(table_name):
-            return {"success": False, "message": f"清空{TABLE_LABELS[table_name]}失败，请查看日志"}
+            records, skipped_duplicate_related_rows = db._filter_duplicate_related_import_rows(
+                table_name,
+                records,
+                skip_existing=True,
+            )
+            if not records:
+                return {
+                    "success": True,
+                    "message": f"未新增记录，已跳过 {skipped_duplicate_related_rows} 条重复明细",
+                }
+
+        if table_name == 'base_info':
+            duplicate_keys, duplicate_samples = db._find_duplicate_base_person_keys_in_records(records)
+            if duplicate_keys:
+                return {
+                    "success": False,
+                    "message": db._format_duplicate_base_person_message(duplicate_samples),
+                }
 
         if table_name == 'base_info' and assessment_years:
             existing_years = db.get_assessment_years()
@@ -342,16 +369,15 @@ def import_prepared_records(
             if not existing_years and not db.set_assessment_years(assessment_years):
                 return {"success": False, "message": "保存年度考核配置失败"}
 
-        if overwrite and table_name == 'base_info':
-            db.clear_assessment_years()
-            if assessment_years and not db.set_assessment_years(assessment_years):
-                return {"success": False, "message": "淇濆瓨骞村害鑰冩牳閰嶇疆澶辫触"}
-            db.replace_base_info_data(records)
+        db.import_excel_data(table_name, records)
+
+        if table_name in RELATED_TABLES and skipped_duplicate_related_rows:
+            message = f"成功导入{TABLE_LABELS[table_name]} {len(records)} 条记录，已跳过 {skipped_duplicate_related_rows} 条重复明细"
         else:
-            db.import_excel_data(table_name, records)
+            message = f"成功导入{TABLE_LABELS[table_name]} {len(records)} 条记录"
         return {
             "success": True,
-            "message": f"成功导入{TABLE_LABELS[table_name]} {len(records)} 条记录",
+            "message": message,
         }
     except Exception as e:
         logger.error(f"导入{table_name}失败: {e}", exc_info=True)

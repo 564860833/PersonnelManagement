@@ -33,6 +33,49 @@ class MainWindowProgressDialogTests(unittest.TestCase):
         self.addCleanup(dialog.deleteLater)
         return dialog
 
+    class FakeMessageBox:
+        Question = object()
+        AcceptRole = object()
+        RejectRole = object()
+        instances = []
+
+        def __init__(self, parent):
+            self.parent = parent
+            self.icon = None
+            self.window_title = None
+            self.text = None
+            self.informative_text = None
+            self.buttons = []
+            self.default_button = None
+            self.clicked_button = None
+            self.__class__.instances.append(self)
+
+        def setIcon(self, icon):
+            self.icon = icon
+
+        def setWindowTitle(self, title):
+            self.window_title = title
+
+        def setText(self, text):
+            self.text = text
+
+        def setInformativeText(self, text):
+            self.informative_text = text
+
+        def addButton(self, text, role):
+            button = {"text": text, "role": role}
+            self.buttons.append(button)
+            return button
+
+        def setDefaultButton(self, button):
+            self.default_button = button
+
+        def exec_(self):
+            self.clicked_button = self.default_button
+
+        def clickedButton(self):
+            return self.clicked_button
+
     def test_modern_loading_dialog_constructs_each_icon_kind(self):
         for icon_kind in ("ai", "import", "export"):
             with self.subTest(icon_kind=icon_kind):
@@ -114,6 +157,90 @@ class MainWindowProgressDialogTests(unittest.TestCase):
         dialog = self.make_dialog_from_factory(factory, title)
         self.assertEqual("正在导入数据", dialog.windowTitle())
         self.assertEqual("import", dialog.icon_kind)
+
+    def test_confirm_import_mode_base_info_uses_update_and_add_button(self):
+        window = self.make_window_stub()
+        self.FakeMessageBox.instances = []
+
+        with patch("ui.main_window.QMessageBox", self.FakeMessageBox):
+            mode = MainWindow.confirm_import_mode(window, "base_info", [("1", "张三")])
+
+        box = self.FakeMessageBox.instances[-1]
+        self.assertEqual("merge", mode)
+        self.assertEqual(["更新并新增", "取消"], [button["text"] for button in box.buttons])
+
+    def test_confirm_import_mode_related_uses_skip_duplicate_button(self):
+        window = self.make_window_stub()
+        self.FakeMessageBox.instances = []
+
+        with patch("ui.main_window.QMessageBox", self.FakeMessageBox):
+            mode = MainWindow.confirm_import_mode(window, "family", [("1", "张三")])
+
+        box = self.FakeMessageBox.instances[-1]
+        self.assertEqual("append_unique", mode)
+        self.assertEqual(["跳过重复并追加新增明细", "取消"], [button["text"] for button in box.buttons])
+
+    def test_import_data_base_info_duplicate_uses_merge_mode(self):
+        window = self.make_window_stub()
+        calls = []
+
+        def run_background_task(title, task_fn, on_success=None, on_error=None, progress_dialog_factory=None):
+            calls.append(title)
+            if title == "正在读取数据":
+                on_success(
+                    {
+                        "success": True,
+                        "records": [{"sequence": 1, "name": "张三"}],
+                        "assessment_years": [],
+                        "duplicate_keys": [("1", "张三")],
+                    }
+                )
+            else:
+                task_fn()
+
+        window.run_background_task = run_background_task
+
+        with (
+            patch("ui.main_window.QFileDialog.getOpenFileName", return_value=("D:/tmp/base_info.xlsx", "")),
+            patch.object(MainWindow, "confirm_import_mode", return_value="merge"),
+            patch("ui.main_window.import_prepared_records", return_value={"success": True, "message": "ok"}) as import_mock,
+        ):
+            MainWindow.import_data(window, "base_info")
+
+        self.assertEqual(["正在读取数据", "正在导入数据"], calls)
+        self.assertTrue(import_mock.called)
+        self.assertEqual({}, import_mock.call_args.kwargs)
+
+    def test_import_data_related_duplicate_uses_skip_unique_mode(self):
+        window = self.make_window_stub()
+        calls = []
+
+        def run_background_task(title, task_fn, on_success=None, on_error=None, progress_dialog_factory=None):
+            calls.append(title)
+            if title == "正在读取数据":
+                on_success(
+                    {
+                        "success": True,
+                        "records": [{"sequence": 1, "name": "张三", "relation": "父亲"}],
+                        "assessment_years": [],
+                        "duplicate_keys": [("1", "张三")],
+                    }
+                )
+            else:
+                task_fn()
+
+        window.run_background_task = run_background_task
+
+        with (
+            patch("ui.main_window.QFileDialog.getOpenFileName", return_value=("D:/tmp/family.xlsx", "")),
+            patch.object(MainWindow, "confirm_import_mode", return_value="append_unique"),
+            patch("ui.main_window.import_prepared_records", return_value={"success": True, "message": "ok"}) as import_mock,
+        ):
+            MainWindow.import_data(window, "family")
+
+        self.assertEqual(["正在读取数据", "正在导入数据"], calls)
+        self.assertTrue(import_mock.called)
+        self.assertEqual({}, import_mock.call_args.kwargs)
 
 
 if __name__ == "__main__":

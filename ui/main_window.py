@@ -386,24 +386,34 @@ class MainWindow(QMainWindow):
         message_box = QMessageBox(self)
         message_box.setIcon(QMessageBox.Question)
         message_box.setWindowTitle("检测到重复数据")
-        message_box.setText(f"本次导入的{table_label}中有 {len(duplicate_keys)} 条记录与数据库已有数据重复。")
-        message_box.setInformativeText(
-            "重复判断规则：序号和姓名都相同。\n\n"
-            f"{sample_text}\n\n"
-            "继续追加会产生重复记录；覆盖当前表会先清空该表再导入本次文件。"
-        )
 
-        append_button = message_box.addButton("追加导入", QMessageBox.AcceptRole)
-        overwrite_button = message_box.addButton("覆盖当前表", QMessageBox.DestructiveRole)
+        if table_name == "base_info":
+            message_box.setText(f"本次导入的{table_label}中有 {len(duplicate_keys)} 条记录与数据库已有人员重复。")
+            message_box.setInformativeText(
+                "重复判断规则：序号和姓名都相同。\n\n"
+                f"{sample_text}\n\n"
+                "选择“更新并新增”后，系统会更新匹配人员的基本信息，新增 Excel 中的新人员，"
+                "并保留数据库中未出现在 Excel 的人员。"
+            )
+            confirm_button = message_box.addButton("更新并新增", QMessageBox.AcceptRole)
+            confirm_mode = 'merge'
+        else:
+            message_box.setText(f"本次导入的{table_label}中有 {len(duplicate_keys)} 条重复明细。")
+            message_box.setInformativeText(
+                "重复判断规则：同一人员且明细内容完全相同。\n\n"
+                f"{sample_text}\n\n"
+                "选择“跳过重复并追加新增明细”后，系统只插入新增明细，重复明细不会再次写入。"
+            )
+            confirm_button = message_box.addButton("跳过重复并追加新增明细", QMessageBox.AcceptRole)
+            confirm_mode = 'append_unique'
+
         message_box.addButton("取消", QMessageBox.RejectRole)
-        message_box.setDefaultButton(append_button)
+        message_box.setDefaultButton(confirm_button)
         message_box.exec_()
 
         clicked_button = message_box.clickedButton()
-        if clicked_button == overwrite_button:
-            return 'overwrite'
-        if clicked_button == append_button:
-            return 'append'
+        if clicked_button == confirm_button:
+            return confirm_mode
         return 'cancel'
 
 
@@ -442,8 +452,12 @@ class MainWindow(QMainWindow):
                 self.set_status(f"导入已取消：{table_label}")
                 return
 
-            mode_label = "覆盖导入" if import_mode == 'overwrite' else "追加导入"
-            overwrite = import_mode == 'overwrite'
+            mode_labels = {
+                'append': "导入",
+                'merge': "更新并新增",
+                'append_unique': "跳过重复并追加新增明细",
+            }
+            mode_label = mode_labels.get(import_mode, "导入")
 
             def import_task():
                 return import_prepared_records(
@@ -451,7 +465,6 @@ class MainWindow(QMainWindow):
                     table_name,
                     preview_result.get("records", []),
                     preview_result.get("assessment_years"),
-                    overwrite=overwrite,
                 )
 
             def handle_import_success(import_result):

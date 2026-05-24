@@ -92,6 +92,20 @@ class DatabasePersonIdTests(unittest.TestCase):
 
         self.assertEqual("1990.01", db.get_all_data("base_info")[0]["birth_date"])
 
+    def test_base_info_import_rejects_duplicate_people_within_batch(self):
+        db = self.open_db()
+
+        with self.assertRaisesRegex(ValueError, "重复人员"):
+            db.import_excel_data(
+                "base_info",
+                [
+                    {"sequence": 1, "name": "张三", "current_grade": "一级"},
+                    {"sequence": "1.0", "name": " 张三 ", "current_grade": "二级"},
+                ],
+            )
+
+        self.assertEqual([], db.get_all_data("base_info"))
+
     def test_related_import_rejects_missing_base_person(self):
         db = self.open_db()
 
@@ -211,13 +225,13 @@ class DatabasePersonIdTests(unittest.TestCase):
         finally:
             conn.close()
 
-    def test_base_info_overwrite_preserves_matching_person_id(self):
+    def test_base_info_import_preserves_matching_person_id(self):
         db = self.open_db()
         db.import_excel_data("base_info", [{"sequence": 1, "name": "张三", "current_grade": "一级"}])
         original_id = db.get_all_data("base_info")[0]["id"]
         db.import_excel_data("rewards", [{"sequence": 1, "name": "张三", "reward_name": "优秀"}])
 
-        db.replace_base_info_data([{"sequence": 1, "name": "张三", "current_grade": "二级"}])
+        db.import_excel_data("base_info", [{"sequence": 1, "name": "张三", "current_grade": "二级"}])
 
         base_row = db.get_all_data("base_info")[0]
         self.assertEqual(original_id, base_row["id"])

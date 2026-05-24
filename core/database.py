@@ -464,7 +464,35 @@ class Database:
             pass
         return normalized
 
+    def _find_duplicate_base_person_keys_in_records(self, records: List[Dict[str, Any]]):
+        seen_keys = {}
+        duplicate_keys = []
+        duplicate_samples = []
+        for index, record in enumerate(records, start=1):
+            key = self._extract_person_key(record, normalize_columns=True)
+            if not key:
+                continue
+            if key in seen_keys:
+                duplicate_keys.append(key)
+                duplicate_samples.append((seen_keys[key], index, key))
+                continue
+            seen_keys[key] = index
+        return duplicate_keys, duplicate_samples
+
+    @staticmethod
+    def _format_duplicate_base_person_message(duplicate_samples: List[tuple]) -> str:
+        sample = "; ".join(
+            f"第 {first_index} 行与第 {duplicate_index} 行 序号={sequence or '空'} 姓名={name or '空'}"
+            for first_index, duplicate_index, (sequence, name) in duplicate_samples[:5]
+        )
+        extra = f" 等 {len(duplicate_samples)} 组" if len(duplicate_samples) > 5 else ""
+        return f"人员基本信息导入失败，存在重复人员{extra}: {sample}"
+
     def _upsert_base_info_rows(self, rows: List[Dict[str, Any]]):
+        duplicate_keys, duplicate_samples = self._find_duplicate_base_person_keys_in_records(rows)
+        if duplicate_keys:
+            raise ValueError(self._format_duplicate_base_person_message(duplicate_samples))
+
         valid_columns = [column for column in self.get_table_columns("base_info") if column != "id"]
         cursor = self.conn.cursor()
         try:
@@ -494,45 +522,6 @@ class Database:
         except sqlite3.Error as e:
             self.conn.rollback()
             logger.error(f"导入数据到表 base_info 失败: {e}")
-            raise
-
-    def replace_base_info_data(self, data: List[Dict[str, Any]]):
-        """Replace base_info while preserving ids for matching sequence/name keys."""
-        rows = self._normalize_import_rows("base_info", data)
-        valid_columns = [column for column in self.get_table_columns("base_info") if column != "id"]
-        imported_ids = []
-        cursor = self.conn.cursor()
-        try:
-            for row in rows:
-                key = self._extract_person_key(row)
-                existing_id = self._find_base_person_id_by_key(key) if key else None
-                db_row = {column: row.get(column) for column in valid_columns}
-                if existing_id:
-                    assignments = ", ".join(f"{column}=?" for column in valid_columns)
-                    values = [db_row[column] for column in valid_columns]
-                    values.append(existing_id)
-                    cursor.execute(f"UPDATE base_info SET {assignments} WHERE id=?", values)
-                    imported_ids.append(existing_id)
-                    continue
-
-                placeholders = ", ".join(["?"] * len(valid_columns))
-                cursor.execute(
-                    f"INSERT INTO base_info ({', '.join(valid_columns)}) VALUES ({placeholders})",
-                    [db_row[column] for column in valid_columns],
-                )
-                imported_ids.append(cursor.lastrowid)
-
-            if imported_ids:
-                placeholders = ", ".join(["?"] * len(imported_ids))
-                cursor.execute(f"DELETE FROM base_info WHERE id NOT IN ({placeholders})", imported_ids)
-            else:
-                cursor.execute("DELETE FROM base_info")
-
-            self.conn.commit()
-            logger.info(f"成功覆盖导入 base_info，保留匹配人员 id，共 {len(rows)} 条")
-        except sqlite3.Error as e:
-            self.conn.rollback()
-            logger.error(f"覆盖导入 base_info 失败: {e}")
             raise
 
     def _insert_related_rows(self, table_name: str, rows: List[Dict[str, Any]]):
@@ -810,12 +799,59 @@ class Database:
 
         return self._normalize_sequence(record.get("sequence")), name
 
+    @staticmethod
+    def _related_import_record_key(person_id: int, record: Dict[str, Any]) -> tuple:
+        content_key = tuple(
+            sorted(
+                (key, str(value))
+                for key, value in record.items()
+                if key not in RELATED_IMPORT_IDENTITY_COLUMNS
+            )
+        )
+        return person_id, content_key
+
+    def _filter_duplicate_related_import_rows(
+        self,
+        table_name: str,
+        records: List[Dict[str, Any]],
+        skip_existing: bool = True,
+    ) -> tuple:
+        validate_table_name(table_name)
+        if table_name not in RELATED_TABLES:
+            return records, 0
+
+        rows = self._normalize_import_rows(table_name, records)
+        related_business_columns = self._related_business_columns(table_name)
+        filtered_rows = []
+        seen_record_keys = set()
+        skipped_count = 0
+
+        for row in rows:
+            if not self._has_related_business_content(row, related_business_columns):
+                continue
+
+            person_id = self._resolve_person_id(row)
+            record_key = self._related_import_record_key(person_id, row)
+            if record_key in seen_record_keys:
+                skipped_count += 1
+                continue
+
+            if skip_existing and self._related_record_exists(table_name, person_id, row):
+                skipped_count += 1
+                continue
+
+            seen_record_keys.add(record_key)
+            filtered_rows.append(row)
+
+        return filtered_rows, skipped_count
+
     def find_duplicate_person_keys(self, table_name: str, records: List[Dict]) -> List[tuple]:
         validate_table_name(table_name)
         if not records:
             return []
 
         if table_name == "base_info":
+            duplicate_keys, _ = self._find_duplicate_base_person_keys_in_records(records)
             existing_keys = {
                 key
                 for key in (self._extract_person_key(row) for row in self.get_all_data("base_info"))
@@ -826,6 +862,7 @@ class Database:
                 key = self._extract_person_key(record, normalize_columns=True)
                 if key and key in existing_keys:
                     duplicates.append(key)
+            duplicates.extend(duplicate_keys)
             return duplicates
 
         duplicates = []
@@ -845,14 +882,7 @@ class Database:
             except ValueError:
                 continue
 
-            content_key = tuple(
-                sorted(
-                    (key, str(value))
-                    for key, value in normalized_record.items()
-                    if key not in {"id", "person_id", "sequence", "name"}
-                )
-            )
-            record_key = (person_id, content_key)
+            record_key = self._related_import_record_key(person_id, normalized_record)
             if record_key in seen_record_keys:
                 key = self._extract_person_key(normalized_record)
                 if key:
@@ -884,21 +914,6 @@ class Database:
             params,
         ).fetchone()
         return row is not None
-
-    def clear_table_data(self, table_name: str) -> bool:
-        validate_table_name(table_name)
-        try:
-            cursor = self.conn.cursor()
-            cursor.execute(f"DELETE FROM {table_name}")
-            if table_name == "base_info":
-                cursor.execute("DELETE FROM system_config WHERE config_key='assessment_years'")
-            self.conn.commit()
-            logger.info(f"业务表 {table_name} 已清空")
-            return True
-        except sqlite3.Error as e:
-            self.conn.rollback()
-            logger.error(f"清空业务表 {table_name} 失败: {e}")
-            return False
 
     def clear_business_data(self) -> bool:
         try:
