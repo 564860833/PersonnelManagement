@@ -361,8 +361,16 @@ class MainWindow(QMainWindow):
             return
         if confirm_danger(self, "确认清空日志", "确定要清空所有日志记录吗？", "清空日志"):
             try:
-                with open(config.LOG_FILE, 'w') as f:
+                root_logger = logging.getLogger()
+                for handler in root_logger.handlers[:]:
+                    if isinstance(handler, logging.FileHandler):
+                        handler.close()
+                        root_logger.removeHandler(handler)
+
+                with open(config.LOG_FILE, 'w', encoding='utf-8') as f:
                     f.write("")
+
+                config.configure_logging()
                 self.set_status("日志文件已清空")
                 show_toast(self, "日志文件已清空")
                 logger.info("用户清空了日志文件")

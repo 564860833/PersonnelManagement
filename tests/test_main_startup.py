@@ -15,6 +15,9 @@ class FakeApp:
     def setWindowIcon(self, _icon):
         pass
 
+    def windowIcon(self):
+        return None
+
     def setFont(self, _font):
         pass
 

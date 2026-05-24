@@ -2,11 +2,10 @@ import html
 import json
 import logging
 import math
-import threading
 from pathlib import Path
 
 import markdown
-from PyQt5.QtCore import QPoint, QRect, QSize, QObject, QTimer, Qt, pyqtSignal
+from PyQt5.QtCore import QPoint, QRect, QSize, QObject, QThread, QTimer, Qt, pyqtSignal, pyqtSlot
 from PyQt5.QtGui import QColor, QPainter
 from PyQt5.QtWidgets import (
     QButtonGroup,
@@ -501,6 +500,7 @@ class AIWorker(QObject):
 
     finished = pyqtSignal(object)
     failed = pyqtSignal(str)
+    done = pyqtSignal()
 
     def __init__(
         self,
@@ -521,6 +521,7 @@ class AIWorker(QObject):
     def stop(self):
         self._is_running = False
 
+    @pyqtSlot()
     def run(self):
         try:
             logger.debug("正在调用 Ollama 模型，model=%s, ctx=%s", self.model_name, self.n_ctx)
@@ -534,6 +535,8 @@ class AIWorker(QObject):
                     self.failed.emit("上下文不足，请在左下角选择更大的上下文后重试")
                 else:
                     self.failed.emit(str(e))
+        finally:
+            self.done.emit()
 
     def _ask_with_context(self, n_ctx):
         return ask_model(
@@ -1696,6 +1699,9 @@ class AIChatDialog(QDialog):
     def closeEvent(self, event):
         if self.worker:
             self.worker.stop()
+        if self.worker_thread and self.worker_thread.isRunning():
+            self.worker_thread.quit()
+            self.worker_thread.wait(3000)
         event.accept()
 
     def showEvent(self, event):
@@ -2476,10 +2482,14 @@ class AIChatDialog(QDialog):
             n_ctx,
             history_snapshot,
         )
-        self.worker_thread = threading.Thread(target=self.worker.run)
-        self.worker_thread.daemon = True
+        self.worker_thread = QThread(self)
+        self.worker.moveToThread(self.worker_thread)
         self.worker.finished.connect(self.handle_response)
         self.worker.failed.connect(self.handle_error)
+        self.worker.done.connect(self.worker_thread.quit)
+        self.worker.done.connect(self.worker.deleteLater)
+        self.worker_thread.finished.connect(self.worker_thread.deleteLater)
+        self.worker_thread.started.connect(self.worker.run)
         self.worker_thread.start()
 
     def handle_response(self, response):
@@ -2505,6 +2515,7 @@ class AIChatDialog(QDialog):
     def finish_inference(self, status_text: str):
         self.is_inference_running = False
         self.worker = None
+        self.worker_thread = None
         self.set_model_status("ready" if self.selected_model_name() else "warning", self.model_ready_text())
         if _safe_instance_value(self, "is_payload_sync_deferred", False):
             self.is_payload_sync_deferred = False

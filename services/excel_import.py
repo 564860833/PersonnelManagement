@@ -336,11 +336,8 @@ def import_prepared_records(
     db = Database(db_path)
     try:
         skipped_duplicate_related_rows = 0
-        if table_name not in RELATED_TABLES:
-            records = db._normalize_import_rows(table_name, records)
 
         if table_name in RELATED_TABLES:
-            records = db._normalize_import_rows(table_name, records)
             if not records:
                 return {"success": False, "message": f"{TABLE_LABELS[table_name]}中未找到有效明细记录"}
 
@@ -350,6 +347,11 @@ def import_prepared_records(
                 skip_existing=True,
             )
             if not records:
+                if skipped_duplicate_related_rows == 0:
+                    return {
+                        "success": False,
+                        "message": f"{TABLE_LABELS[table_name]}中未找到有效明细记录",
+                    }
                 return {
                     "success": True,
                     "message": f"未新增记录，已跳过 {skipped_duplicate_related_rows} 条重复明细",

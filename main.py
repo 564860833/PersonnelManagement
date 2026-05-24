@@ -86,15 +86,7 @@ def main():
     try:
         # 创建Qt应用程序
         app = create_application()
-
-        # 设置应用程序图标（任务栏图标） - 使用资源路径函数
-        try:
-            app_icon = QIcon(str(resource_path('app_icon.ico')))
-            app.setWindowIcon(app_icon)
-        except Exception as e:
-            # 忽略图标加载失败
-            logger.error(f"设置任务栏图标失败: {e}")
-            app_icon = QIcon()
+        app_icon = app.windowIcon()
 
         # 设置全局字体
         try:
