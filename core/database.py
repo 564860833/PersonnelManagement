@@ -22,6 +22,8 @@ logger = logging.getLogger("Database")
 RELATED_TABLES = ("rewards", "family", "resume")
 RELATED_IMPORT_IDENTITY_COLUMNS = {"id", "person_id", "sequence", "name"}
 DATE_DISPLAY_SUFFIX = "_display"
+SQLITE_BUSY_TIMEOUT_MS = 10000
+SQLITE_CONNECT_TIMEOUT_SECONDS = SQLITE_BUSY_TIMEOUT_MS / 1000
 BLANK_PLACEHOLDERS = {"-", "—", "–", "－", "无", "無", "暂无", "无日期", "n/a", "na"}
 
 RELATED_TABLE_COLUMNS = {
@@ -108,10 +110,7 @@ class Database:
             from config import config
 
             path = db_path if db_path else config.DB_PATH
-            self.conn = sqlite3.connect(path)
-            self.conn.row_factory = sqlite3.Row
-            self._register_sqlite_functions()
-            self.conn.execute("PRAGMA foreign_keys = ON")
+            self._open_connection(path)
             logger.info(f"成功连接到数据库: {path}")
         except sqlite3.Error as e:
             logger.error(f"数据库连接失败: {e}")
@@ -119,11 +118,22 @@ class Database:
         except ImportError as e:
             logger.error(f"无法导入配置模块: {e}")
             default_path = "personnel_system.db"
-            self.conn = sqlite3.connect(default_path)
-            self.conn.row_factory = sqlite3.Row
-            self._register_sqlite_functions()
-            self.conn.execute("PRAGMA foreign_keys = ON")
+            self._open_connection(default_path)
             logger.info(f"使用默认路径连接数据库: {default_path}")
+
+    def _open_connection(self, path):
+        self.conn = sqlite3.connect(path, timeout=SQLITE_CONNECT_TIMEOUT_SECONDS)
+        self.conn.row_factory = sqlite3.Row
+        self._register_sqlite_functions()
+        self.conn.execute("PRAGMA foreign_keys = ON")
+        self.conn.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
+        self._enable_wal_mode()
+
+    def _enable_wal_mode(self):
+        try:
+            self.conn.execute("PRAGMA journal_mode = WAL")
+        except sqlite3.Error as e:
+            logger.warning(f"启用 SQLite WAL 模式失败: {e}")
 
     def _register_sqlite_functions(self):
         self.conn.create_function("personnel_month_key", 1, self._month_key)

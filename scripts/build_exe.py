@@ -1,78 +1,123 @@
-import os
+# -*- coding: utf-8 -*-
+
+import argparse
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+APP_NAME = "人员信息管理系统"
+AI_PACKAGE_NAME = f"{APP_NAME}-AI离线包"
+SPEC_FILE = PROJECT_ROOT / f"{APP_NAME}.spec"
+DIST_DIR = PROJECT_ROOT / "dist"
+APP_DIST_DIR = DIST_DIR / APP_NAME
 OLLAMA_RUNTIME_NAMES = ("ollama", "runtime/ollama")
 
 
-def clean_old_builds():
-    """清理之前打包产生的无用文件和文件夹"""
-    print("开始清理旧的打包文件...")
-
-    # 需要删除的文件夹和文件列表
-    # 注意：使用 -n 参数后，生成的 spec 文件名也会变成 "人员信息管理系统.spec"
-    folders_to_delete = ['build', 'dist', '__pycache__']
-    files_to_delete = ['main.spec', '人员信息管理系统.spec']
-
-    # 删除文件夹
-    for folder in folders_to_delete:
-        folder_path = PROJECT_ROOT / folder
-        if folder_path.exists():
-            try:
-                shutil.rmtree(folder_path)
-                print(f"  [成功] 已删除文件夹: {folder}")
-            except Exception as e:
-                print(f"  [失败] 无法删除文件夹 {folder}: {e}")
-
-    # 删除文件
-    for file in files_to_delete:
-        file_path = PROJECT_ROOT / file
-        if file_path.exists():
-            try:
-                os.remove(file_path)
-                print(f"  [成功] 已删除文件: {file}")
-            except Exception as e:
-                print(f"  [失败] 无法删除文件 {file}: {e}")
-
-    print("清理完成！\n")
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description="Build the personnel management desktop app.")
+    parser.add_argument(
+        "--ai-package",
+        action="store_true",
+        help="Create a separate offline AI asset package with models/ and ollama/.",
+    )
+    parser.add_argument(
+        "--skip-build",
+        action="store_true",
+        help="Skip PyInstaller and only run the requested packaging steps.",
+    )
+    parser.add_argument(
+        "--skip-runtime-assets",
+        action="store_true",
+        help="Compatibility flag. Runtime AI assets are skipped by default.",
+    )
+    return parser.parse_args(argv)
 
 
-def build_executable():
-    """使用 PyInstaller 打包程序"""
-    print("开始执行打包命令 (这可能需要几分钟时间)...")
-
-    # 定义打包命令
-    # -F: 单文件模式
-    # -w: 无控制台窗口
-    # -i: 指定图标
-    # -n: 指定生成的 exe 文件名
-    command = [
-        "pyinstaller",
-        "-F",
-        "-w",
-        "-i", "app_icon.ico",
-        "-n", "人员信息管理系统",
-        "main.py"
-    ]
-
+def assert_project_child(path: Path):
+    resolved_root = PROJECT_ROOT.resolve()
+    resolved_path = path.resolve()
+    if resolved_path == resolved_root:
+        raise RuntimeError("refusing to remove project root")
     try:
-        # 运行打包命令
+        resolved_path.relative_to(resolved_root)
+    except ValueError as exc:
+        raise RuntimeError(f"refusing to operate outside project root: {resolved_path}") from exc
+
+
+def remove_tree(path: Path, display_name: str):
+    if not path.exists():
+        return
+    assert_project_child(path)
+    shutil.rmtree(path)
+    print(f"Removed {display_name}: {path}")
+
+
+def clean_old_builds():
+    print("Cleaning old build outputs...")
+    remove_tree(PROJECT_ROOT / "build", "build directory")
+    remove_tree(DIST_DIR, "dist directory")
+    remove_tree(PROJECT_ROOT / "__pycache__", "__pycache__ directory")
+    print("Clean complete.\n")
+
+
+def print_build_environment() -> bool:
+    print(f"Python executable: {sys.executable}")
+    print(f"Python version: {sys.version.split()[0]}")
+
+    result = subprocess.run(
+        [sys.executable, "-m", "PyInstaller", "--version"],
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        print("[ERROR] PyInstaller is not installed in the current Python environment.")
+        stderr = (result.stderr or "").strip()
+        if stderr:
+            print(stderr)
+        print(r"Run this script with .\.venv\Scripts\python.exe scripts\build_exe.py")
+        return False
+
+    print(f"PyInstaller version: {(result.stdout or '').strip()}")
+    return True
+
+
+def build_executable() -> bool:
+    if not SPEC_FILE.exists():
+        print(f"[ERROR] Spec file not found: {SPEC_FILE}")
+        return False
+
+    if not print_build_environment():
+        return False
+
+    command = [
+        sys.executable,
+        "-m",
+        "PyInstaller",
+        "--noconfirm",
+        "--clean",
+        str(SPEC_FILE),
+    ]
+    print("\nRunning PyInstaller...")
+    try:
         subprocess.run(command, check=True, cwd=PROJECT_ROOT)
-        print("\n打包成功！生成的可执行文件位于 dist 文件夹中。")
-        return True
-    except subprocess.CalledProcessError as e:
-        print(f"\n[错误] 打包失败，错误代码: {e}")
+    except subprocess.CalledProcessError as exc:
+        print(f"\n[ERROR] Build failed with exit code {exc.returncode}.")
         return False
-    except FileNotFoundError:
-        print("\n[错误] 找不到 pyinstaller 命令，请确保已通过 'pip install pyinstaller' 安装。")
+
+    exe_path = APP_DIST_DIR / f"{APP_NAME}.exe"
+    if not exe_path.exists():
+        print(f"\n[ERROR] Expected executable was not created: {exe_path}")
         return False
+
+    print(f"\nBase app build complete: {exe_path}")
+    return True
 
 
 def find_ollama_runtime_source():
-    """查找可复制到 dist 的 Ollama 运行时目录。"""
     for relative_name in OLLAMA_RUNTIME_NAMES:
         candidate = PROJECT_ROOT / relative_name
         if (candidate / "ollama.exe").exists():
@@ -82,13 +127,10 @@ def find_ollama_runtime_source():
     if found:
         return Path(found).resolve().parent
 
-    local_app_data = os.environ.get("LOCALAPPDATA", "")
-    program_files = os.environ.get("ProgramFiles", "")
-    program_files_x86 = os.environ.get("ProgramFiles(x86)", "")
     candidates = [
-        Path(local_app_data) / "Programs" / "Ollama",
-        Path(program_files) / "Ollama",
-        Path(program_files_x86) / "Ollama",
+        Path.home() / "AppData" / "Local" / "Programs" / "Ollama",
+        Path("C:/Program Files/Ollama"),
+        Path("C:/Program Files (x86)/Ollama"),
     ]
     for candidate in candidates:
         if (candidate / "ollama.exe").exists():
@@ -97,48 +139,81 @@ def find_ollama_runtime_source():
 
 
 def copy_directory(source: Path, target: Path, display_name: str):
-    if target.exists():
-        shutil.rmtree(target)
-
-    print(f"\n正在复制 {display_name} 到 dist（文件较大时可能需要一些时间）...")
+    print(f"Copying {display_name}: {source} -> {target}")
     shutil.copytree(source, target)
-    print(f"[成功] 已复制 {display_name}: {target}")
 
 
-def copy_runtime_assets():
-    """复制运行时外部资源。模型和 Ollama 运行时保持为 exe 同级目录。"""
-    dist_dir = PROJECT_ROOT / "dist"
+def write_ai_package_readme(target_dir: Path):
+    readme = target_dir / "README.txt"
+    readme.write_text(
+        (
+            "人员信息管理系统 AI 离线包\n"
+            "\n"
+            "使用方法：\n"
+            "1. 先解压/复制基础程序目录 dist\\人员信息管理系统。\n"
+            "2. 将本目录中的 models 和 ollama 两个文件夹复制到基础程序目录内。\n"
+            "3. 最终目录应包含 人员信息管理系统.exe、models、ollama。\n"
+            "4. 重新启动程序后，AI 功能会优先使用程序目录内的离线资源。\n"
+        ),
+        encoding="utf-8",
+    )
+
+
+def create_ai_package() -> bool:
     source_models = PROJECT_ROOT / "models"
-    target_models = dist_dir / "models"
-    target_ollama = dist_dir / "ollama"
-
-    if not dist_dir.exists():
-        print("\n未找到 dist 目录，跳过运行资源复制。")
-        return
-
-    if not source_models.exists():
-        print("\n未找到 models 目录，跳过模型复制。")
-    else:
-        copy_directory(source_models, target_models, "models 目录")
-
     source_ollama = find_ollama_runtime_source()
-    if source_ollama is None:
-        print("\n[警告] 未找到 Ollama 运行时，AI 功能在未安装 Ollama 的离线电脑上不可用。")
-        print("       建议将 ollama.exe 所在目录放到项目根目录的 ollama 文件夹后重新打包。")
-        return
 
-    copy_directory(source_ollama, target_ollama, "Ollama 运行时")
+    missing = []
+    if not source_models.exists():
+        missing.append(str(source_models))
+    if source_ollama is None:
+        missing.append("ollama runtime directory containing ollama.exe")
+    if missing:
+        print("[ERROR] Cannot create AI package. Missing:")
+        for item in missing:
+            print(f"  - {item}")
+        return False
+
+    DIST_DIR.mkdir(parents=True, exist_ok=True)
+    final_dir = DIST_DIR / AI_PACKAGE_NAME
+    temp_dir = DIST_DIR / f"{AI_PACKAGE_NAME}.tmp"
+    remove_tree(temp_dir, "temporary AI package")
+    temp_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        copy_directory(source_models, temp_dir / "models", "models")
+        copy_directory(source_ollama, temp_dir / "ollama", "Ollama runtime")
+        write_ai_package_readme(temp_dir)
+
+        remove_tree(final_dir, "previous AI package")
+        temp_dir.rename(final_dir)
+    except Exception as exc:
+        remove_tree(temp_dir, "failed temporary AI package")
+        print(f"[ERROR] Failed to create AI package: {exc}")
+        return False
+
+    print(f"AI offline package complete: {final_dir}")
+    return True
+
+
+def main(argv=None) -> int:
+    args = parse_args(argv)
+    if args.skip_runtime_assets:
+        print("Runtime AI assets are skipped by default. Use --ai-package to create them separately.")
+
+    if not args.skip_build:
+        clean_old_builds()
+        if not build_executable():
+            return 1
+
+    if args.ai_package and not create_ai_package():
+        return 1
+
+    print("\nDone.")
+    if not args.ai_package:
+        print("Base package only. Run with --ai-package to create the separate offline AI package.")
+    return 0
 
 
 if __name__ == "__main__":
-    # 1. 清理旧文件
-    clean_old_builds()
-
-    # 2. 执行打包
-    build_ok = build_executable()
-
-    # 3. 复制外部运行资源
-    if build_ok:
-        copy_runtime_assets()
-
-    print("\n所有流程执行完毕！你可以直接打开 dist 文件夹运行 '人员信息管理系统.exe' 测试了。")
+    sys.exit(main())

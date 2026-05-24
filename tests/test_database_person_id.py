@@ -3,6 +3,7 @@ import sqlite3
 import tempfile
 import unittest
 
+import openpyxl
 import pandas as pd
 
 from core.database import Database
@@ -25,6 +26,8 @@ class DatabasePersonIdTests(unittest.TestCase):
         db = self.open_db()
 
         self.assertEqual(1, db.conn.execute("PRAGMA foreign_keys").fetchone()[0])
+        self.assertEqual(10000, db.conn.execute("PRAGMA busy_timeout").fetchone()[0])
+        self.assertEqual("wal", db.conn.execute("PRAGMA journal_mode").fetchone()[0].lower())
         self.assertIn("person_id", db.get_table_columns("rewards"))
         self.assertNotIn("sequence", db.get_table_columns("rewards"))
         self.assertNotIn("name", db.get_table_columns("rewards"))
@@ -418,6 +421,39 @@ class DatabasePersonIdTests(unittest.TestCase):
             list(exported.columns),
         )
         self.assertNotIn("extra_field", exported.columns)
+
+    def test_export_escapes_formula_like_text_values(self):
+        path = self.make_db_path() + ".xlsx"
+        self.addCleanup(lambda: os.path.exists(path) and os.remove(path))
+
+        export_table_data(
+            [
+                {
+                    "sequence": 1,
+                    "name": "=1+1",
+                    "current_position": "+1+1",
+                    "current_grade": "-1+1",
+                    "ethnicity": "普通文本",
+                    "fulltime_education": "'=already_text",
+                    "remarks": "@SUM(1,1)",
+                }
+            ],
+            path,
+            "base_info",
+        )
+
+        workbook = openpyxl.load_workbook(path, data_only=False)
+        sheet = workbook.active
+        values = [cell.value for cell in sheet[2]]
+        data_types = [cell.data_type for cell in sheet[2]]
+
+        self.assertIn("'=1+1", values)
+        self.assertIn("'+1+1", values)
+        self.assertIn("'-1+1", values)
+        self.assertIn("'@SUM(1,1)", values)
+        self.assertIn("普通文本", values)
+        self.assertIn("'=already_text", values)
+        self.assertTrue(all(data_type != "f" for data_type in data_types))
 
 
 if __name__ == "__main__":

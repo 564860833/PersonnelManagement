@@ -192,6 +192,18 @@ QPushButton#secondaryButton:hover {
     border-color: #8BB6E8;
     color: #174A8B;
 }
+QPushButton#aiButton {
+    background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                      stop:0 #2563EB, stop:1 #7C3AED);
+    border-color: #5B45D8;
+    color: #ffffff;
+    font-weight: bold;
+}
+QPushButton#aiButton:hover {
+    background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                      stop:0 #1D4ED8, stop:1 #6D28D9);
+    border-color: #4F46E5;
+}
 QPushButton#dangerButton {
     background-color: #B42318;
     border-color: #B42318;

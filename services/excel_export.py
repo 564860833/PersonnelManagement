@@ -13,6 +13,24 @@ from metadata.constants import (
 
 logger = logging.getLogger("ExcelExport")
 
+DANGEROUS_EXCEL_FORMULA_PREFIXES = ("=", "+", "-", "@")
+
+
+def escape_excel_formula(value):
+    """Return a text-safe value for Excel exports."""
+    if not isinstance(value, str) or value.startswith("'"):
+        return value
+
+    stripped = value.lstrip()
+    if stripped and stripped[0] in DANGEROUS_EXCEL_FORMULA_PREFIXES:
+        return f"'{value}"
+    return value
+
+
+def escape_excel_formulas(df: pd.DataFrame) -> pd.DataFrame:
+    """Escape formula-like strings before writing an Excel workbook."""
+    return df.apply(lambda column: column.map(escape_excel_formula))
+
 
 def export_table_data(data, file_path: str, table_name: str, assessment_years=None) -> int:
     """Export table data to an Excel file and return exported row count."""
@@ -48,6 +66,7 @@ def export_table_data(data, file_path: str, table_name: str, assessment_years=No
             for field_name in ordered_columns
         }
     )
+    df = escape_excel_formulas(df)
 
     df.to_excel(file_path, index=False)
 

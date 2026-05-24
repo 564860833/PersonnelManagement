@@ -782,26 +782,35 @@ class QueryTab(QWidget):
         button_layout.setSpacing(15)
         button_layout.setContentsMargins(0, 8, 0, 0)
 
+        def fit_action_button_width(button, minimum_width=112):
+            metrics = button.fontMetrics()
+            text_width = (
+                metrics.horizontalAdvance(button.text())
+                if hasattr(metrics, "horizontalAdvance")
+                else metrics.width(button.text())
+            )
+            button.setFixedWidth(max(minimum_width, text_width + 48))
+
         # 使用更美观的按钮样式
-        self.query_btn = QPushButton("查询")
-        self.query_btn.setFixedWidth(100)
-        self.query_btn.setStyleSheet(button_style("primary"))
+        self.query_btn = QPushButton("执行查询")
+        self.query_btn.setObjectName("primaryButton")
+        fit_action_button_width(self.query_btn)
         self.query_btn.clicked.connect(self.execute_query)
 
-        self.clear_btn = QPushButton("清空条件")
-        self.clear_btn.setFixedWidth(100)
-        self.clear_btn.setStyleSheet(button_style("secondary"))
+        self.clear_btn = QPushButton("重置条件")
+        self.clear_btn.setObjectName("secondaryButton")
+        fit_action_button_width(self.clear_btn)
         self.clear_btn.clicked.connect(self.clear_conditions)
 
-        self.view_all_btn = QPushButton("查看全部")
-        self.view_all_btn.setFixedWidth(100)
-        self.view_all_btn.setStyleSheet(button_style("info"))
+        self.view_all_btn = QPushButton("加载全部")
+        self.view_all_btn.setObjectName("secondaryButton")
+        fit_action_button_width(self.view_all_btn)
         self.view_all_btn.clicked.connect(self.view_all_data)
 
         # ======== 【新增】AI 分析按钮开始 ========
-        self.ai_btn = QPushButton("AI 智能分析")
-        self.ai_btn.setFixedWidth(120)  # 稍微宽一点
-        self.ai_btn.setStyleSheet(button_style("accent"))
+        self.ai_btn = QPushButton("智能分析")
+        self.ai_btn.setObjectName("aiButton")
+        fit_action_button_width(self.ai_btn)
         # 绑定点击事件 (open_ai_chat 方法需要你在后面定义)
         self.ai_btn.clicked.connect(self.open_ai_chat)
         # ======== 【新增】AI 分析按钮结束 ========
@@ -900,7 +909,7 @@ class QueryTab(QWidget):
         """Create a borderless white card section."""
         card = QFrame()
         card.setObjectName("sectionCard")
-        card.setStyleSheet(CARD_STYLE + QUERY_FORM_CONTROL_STYLE)
+        card.setStyleSheet(CARD_STYLE + DIALOG_BUTTON_STYLE + QUERY_FORM_CONTROL_STYLE)
         self.apply_card_shadow(card)
 
         layout = QVBoxLayout(card)

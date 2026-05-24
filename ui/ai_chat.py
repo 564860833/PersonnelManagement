@@ -34,6 +34,7 @@ from PyQt5.QtWidgets import (
 from services.ai_context import recommend_context_length
 from services.ai_direct import ask_model, is_context_length_error
 from services.ollama_manager import APP_OLLAMA_HOST, fetch_ollama_models
+from app_paths import runtime_path
 from ui.styles import DIALOG_BASE_STYLE, DIALOG_BUTTON_STYLE
 
 logger = logging.getLogger("AIChat")
@@ -153,7 +154,7 @@ FIELD_GROUPS = {
 }
 OTHER_FIELD_GROUP_LABEL = "其他字段"
 
-AI_CORE_FIELDS_CONFIG_FILE = Path("ai_core_fields.json")
+AI_CORE_FIELDS_CONFIG_FILE = runtime_path("ai_core_fields.json")
 MODEL_PLACEHOLDER = "未检测到可用模型"
 NAV_SIDEBAR_WIDTH = 360
 NAV_SIDEBAR_MIN_WIDTH = 360

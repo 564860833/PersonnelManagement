@@ -1,7 +1,8 @@
-import os
 import logging
 from PyQt5.QtGui import QFont
 from datetime import datetime
+from pathlib import Path
+from app_paths import data_path
 from metadata.constants import TABLE_LABELS
 
 logger = logging.getLogger('Config')
@@ -51,18 +52,20 @@ class Config:
         ]
 
     def get_db_path(self) -> str:
-        """获取数据库文件路径 - 使用相对路径"""
-        return "personnel_system.db"  # 直接放在程序目录
+        """获取数据库文件路径 - 使用 exe 同级隐藏 data 目录。"""
+        return str(data_path("personnel_system.db"))
 
     def get_log_path(self) -> str:
-        """获取日志文件路径 - 使用相对路径"""
-        return "application.log"  # 直接放在程序目录
+        """获取日志文件路径 - 使用 exe 同级隐藏 data 目录。"""
+        return str(data_path("application.log"))
 
     def ensure_log_file_exists(self):
-        """确保日志文件存在"""
-        if not os.path.exists(self.LOG_FILE):
+        """确保日志文件存在。"""
+        log_path = Path(self.LOG_FILE)
+        if not log_path.exists():
             try:
-                with open(self.LOG_FILE, 'w', encoding='utf-8') as f:
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                with log_path.open('w', encoding='utf-8') as f:
                     f.write(f"{datetime.now()} - 日志文件创建\n")
             except Exception as e:
                 logger.error(f"无法创建日志文件: {e}")
@@ -78,6 +81,7 @@ class Config:
 
         # 创建文件处理器并设置UTF-8编码
         formatter = logging.Formatter(self.LOG_FORMAT)
+        Path(self.LOG_FILE).parent.mkdir(parents=True, exist_ok=True)
         file_handler = logging.FileHandler(self.LOG_FILE, encoding='utf-8')
         file_handler.setFormatter(formatter)
         root_logger.addHandler(file_handler)

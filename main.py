@@ -17,6 +17,7 @@ os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = plugin_path
 # 现在安全导入其他模块
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QApplication, QMessageBox
+from app_paths import resource_path as _shared_resource_path
 from config import config
 from core.database import Database
 from ui.login import LoginDialog
@@ -32,11 +33,8 @@ logger.info(f"Qt 插件路径已设置为: {plugin_path}")
 
 
 def resource_path(relative_path):
-    """获取资源绝对路径，适用于开发环境和PyInstaller打包环境"""
-    if hasattr(sys, '_MEIPASS'):
-        # PyInstaller创建的临时文件夹
-        return os.path.join(sys._MEIPASS, relative_path)
-    return os.path.join(os.path.abspath("."), relative_path)
+    """获取资源绝对路径，适用于开发环境和 PyInstaller 打包环境。"""
+    return _shared_resource_path(relative_path)
 
 
 def create_application():
@@ -53,8 +51,8 @@ def create_application():
             logger.info(f"尝试加载应用程序图标: {icon_path}")
 
             # 创建并设置图标
-            if os.path.exists(icon_path):
-                app_icon = QIcon(icon_path)
+            if icon_path.exists():
+                app_icon = QIcon(str(icon_path))
                 app.setWindowIcon(app_icon)
                 logger.info("应用程序图标已设置")
             else:
@@ -91,7 +89,7 @@ def main():
 
         # 设置应用程序图标（任务栏图标） - 使用资源路径函数
         try:
-            app_icon = QIcon(resource_path('app_icon.ico'))
+            app_icon = QIcon(str(resource_path('app_icon.ico')))
             app.setWindowIcon(app_icon)
         except Exception as e:
             # 忽略图标加载失败

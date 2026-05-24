@@ -6,13 +6,14 @@ import logging
 import os
 import shutil
 import subprocess
-import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import requests
+
+from app_paths import application_dir
 
 
 logger = logging.getLogger("OllamaManager")
@@ -39,9 +40,7 @@ class OllamaStatus:
 
 def get_application_dir() -> Path:
     """Return the executable folder when frozen, otherwise the project root."""
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parent.parent
+    return application_dir()
 
 
 def get_local_models_dir() -> Optional[Path]:
