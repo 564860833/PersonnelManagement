@@ -31,7 +31,7 @@ from PyQt5.QtWidgets import (
 )
 
 from services.ai_context import recommend_context_length
-from services.ai_direct import ask_model, is_context_length_error
+from services.ai_direct import ask_model, ask_model_stream, build_analysis_data_json, is_context_length_error
 from services.ollama_manager import APP_OLLAMA_HOST, fetch_ollama_models
 from app_paths import runtime_path
 from ui.styles import DIALOG_BASE_STYLE, DIALOG_BUTTON_STYLE
@@ -159,6 +159,7 @@ NAV_SIDEBAR_WIDTH = 360
 NAV_SIDEBAR_MIN_WIDTH = 360
 TABLE_NAV_BUTTON_MIN_WIDTH = 284
 CONTEXT_PRESSURE_REFRESH_DELAY_MS = 200
+STREAM_RENDER_DELAY_MS = 60
 CONTEXT_BUFFER_RATIO = 0.25
 CJK_TOKEN_WEIGHT = 1.8
 ASCII_TOKEN_WEIGHT = 0.3
@@ -500,6 +501,7 @@ class AIWorker(QObject):
 
     finished = pyqtSignal(object)
     failed = pyqtSignal(str)
+    delta = pyqtSignal(str)
     done = pyqtSignal()
 
     def __init__(
@@ -509,6 +511,7 @@ class AIWorker(QObject):
         model_name,
         n_ctx,
         history_messages=None,
+        analysis_data_json=None,
     ):
         super().__init__()
         self.question = question
@@ -516,6 +519,7 @@ class AIWorker(QObject):
         self.model_name = model_name
         self.n_ctx = n_ctx
         self.history_messages = [dict(message) for message in history_messages or []]
+        self.analysis_data_json = analysis_data_json
         self._is_running = True
 
     def stop(self):
@@ -539,13 +543,19 @@ class AIWorker(QObject):
             self.done.emit()
 
     def _ask_with_context(self, n_ctx):
-        return ask_model(
+        return ask_model_stream(
             self.question,
             self.analysis_payload,
             self.model_name,
             n_ctx,
             history_messages=self.history_messages,
+            on_delta=self._handle_delta,
+            analysis_data_json=self.analysis_data_json,
         )
+
+    def _handle_delta(self, delta):
+        if self._is_running and delta:
+            self.delta.emit(str(delta))
 
 
 def render_message_html(role: str, content: str, is_error: bool = False) -> str:
@@ -1676,14 +1686,23 @@ class AIChatDialog(QDialog):
         self.enabled_tables = {}
         self._selected_payload_cache_key = None
         self._selected_payload_cache = None
+        self._selected_data_json_cache_key = None
+        self._selected_data_json_cache_value = None
         self._payload_token_cache_key = None
         self._payload_token_cache_value = None
+        self._chat_display_messages = []
+        self._streaming_message_index = None
+        self._stream_render_pending = False
         self._pressure_refresh_scheduled = False
         self._pressure_refresh_pending = False
         self.pressure_timer = QTimer(self)
         self.pressure_timer.setSingleShot(True)
         self.pressure_timer.setInterval(CONTEXT_PRESSURE_REFRESH_DELAY_MS)
         self.pressure_timer.timeout.connect(self._apply_pending_pressure_refresh)
+        self.stream_render_timer = QTimer(self)
+        self.stream_render_timer.setSingleShot(True)
+        self.stream_render_timer.setInterval(STREAM_RENDER_DELAY_MS)
+        self.stream_render_timer.timeout.connect(self._flush_stream_render)
         self.setWindowTitle("智能分析助手")
         self.setup_ui()
         self._apply_default_geometry()
@@ -2370,6 +2389,8 @@ class AIChatDialog(QDialog):
     def invalidate_selection_caches(self):
         self._selected_payload_cache_key = None
         self._selected_payload_cache = None
+        self._selected_data_json_cache_key = None
+        self._selected_data_json_cache_value = None
         self._payload_token_cache_key = None
         self._payload_token_cache_value = None
 
@@ -2417,6 +2438,17 @@ class AIChatDialog(QDialog):
             self._selected_payload_cache_key = cache_key
         return self._selected_payload_cache
 
+    def selected_analysis_data_json(self) -> str:
+        selected_payload = self.selected_analysis_payload()
+        cache_key = _safe_instance_value(self, "_selected_payload_cache_key")
+        if (
+            cache_key != _safe_instance_value(self, "_selected_data_json_cache_key")
+            or _safe_instance_value(self, "_selected_data_json_cache_value") is None
+        ):
+            self._selected_data_json_cache_value = build_analysis_data_json(selected_payload)
+            self._selected_data_json_cache_key = cache_key
+        return self._selected_data_json_cache_value
+
     def has_selected_analysis_payload(self) -> bool:
         table_count, column_count, row_count = self.selected_payload_stats()
         return table_count > 0 and column_count > 0 and row_count > 0
@@ -2436,7 +2468,15 @@ class AIChatDialog(QDialog):
         """清空对话历史。"""
         self.history_messages = []
         self._pending_history_length = None
-        self.chat_history.clear()
+        self._chat_display_messages = []
+        self._streaming_message_index = None
+        self._stream_render_pending = False
+        stream_timer = _safe_instance_value(self, "stream_render_timer")
+        if stream_timer is not None and hasattr(stream_timer, "stop"):
+            stream_timer.stop()
+        chat_history = _safe_instance_value(self, "chat_history")
+        if chat_history is not None and hasattr(chat_history, "clear"):
+            chat_history.clear()
         self.status_label.setText("对话已清空，可继续提问。")
 
     def start_inference(self):
@@ -2459,6 +2499,7 @@ class AIChatDialog(QDialog):
             return
 
         selected_payload = self.selected_analysis_payload()
+        analysis_data_json = self.selected_analysis_data_json()
 
         if self.current_context_recommendation is None:
             self.refresh_context_recommendation(model_name)
@@ -2481,9 +2522,11 @@ class AIChatDialog(QDialog):
             model_name,
             n_ctx,
             history_snapshot,
+            analysis_data_json=analysis_data_json,
         )
         self.worker_thread = QThread(self)
         self.worker.moveToThread(self.worker_thread)
+        self.worker.delta.connect(self.handle_stream_delta)
         self.worker.finished.connect(self.handle_response)
         self.worker.failed.connect(self.handle_error)
         self.worker.done.connect(self.worker_thread.quit)
@@ -2494,13 +2537,24 @@ class AIChatDialog(QDialog):
 
     def handle_response(self, response):
         final_answer = str(response).strip()
+        messages = self._display_messages()
+        streaming_index = _safe_instance_value(self, "_streaming_message_index")
+        if isinstance(streaming_index, int) and 0 <= streaming_index < len(messages):
+            if not final_answer:
+                final_answer = str(messages[streaming_index].get("content", "")).strip()
+            messages[streaming_index]["content"] = final_answer
+            self._reset_stream_state(stop_timer=True)
+            self._render_chat_history()
+        else:
+            self._reset_stream_state(stop_timer=True)
+            self.append_message("assistant", final_answer)
         self.history_messages.append({"role": "assistant", "content": final_answer})
-        self.append_message("assistant", final_answer)
         self._pending_history_length = None
         self.finish_inference("就绪")
 
     def handle_error(self, message):
         error_text = str(message).strip() or "未知错误"
+        self._discard_streaming_message()
         self.append_message("assistant", f"AI 运行出错: {error_text}", is_error=True)
         pending_length = getattr(self, "_pending_history_length", None)
         if isinstance(pending_length, int) and pending_length >= 0:
@@ -2509,8 +2563,92 @@ class AIChatDialog(QDialog):
         self.finish_inference(f"分析失败：{error_text}")
 
     def append_message(self, role: str, content: str, is_error: bool = False):
-        self.chat_history.append(render_message_html(role, content, is_error=is_error))
-        self.chat_history.verticalScrollBar().setValue(self.chat_history.verticalScrollBar().maximum())
+        self._display_messages().append(
+            {
+                "role": role,
+                "content": str(content),
+                "is_error": bool(is_error),
+            }
+        )
+        self._render_chat_history()
+
+    def handle_stream_delta(self, delta):
+        delta = str(delta or "")
+        if not delta or not _safe_instance_value(self, "is_inference_running", False):
+            return
+
+        messages = self._display_messages()
+        streaming_index = _safe_instance_value(self, "_streaming_message_index")
+        if not isinstance(streaming_index, int) or not (0 <= streaming_index < len(messages)):
+            messages.append({"role": "assistant", "content": delta, "is_error": False})
+            self._streaming_message_index = len(messages) - 1
+            self._stream_render_pending = False
+            self._render_chat_history()
+            return
+
+        messages[streaming_index]["content"] = str(messages[streaming_index].get("content", "")) + delta
+        self._stream_render_pending = True
+        stream_timer = _safe_instance_value(self, "stream_render_timer")
+        if stream_timer is not None and hasattr(stream_timer, "start"):
+            stream_timer.start()
+        else:
+            self._flush_stream_render()
+
+    def _flush_stream_render(self):
+        if not _safe_instance_value(self, "_stream_render_pending", False):
+            return
+        self._stream_render_pending = False
+        self._render_chat_history()
+
+    def _display_messages(self):
+        messages = _safe_instance_value(self, "_chat_display_messages")
+        if messages is None:
+            messages = []
+            self._chat_display_messages = messages
+        return messages
+
+    def _render_chat_history(self):
+        chat_history = _safe_instance_value(self, "chat_history")
+        if chat_history is None:
+            return
+
+        rendered_messages = [
+            render_message_html(
+                message.get("role", "assistant"),
+                message.get("content", ""),
+                is_error=bool(message.get("is_error", False)),
+            )
+            for message in self._display_messages()
+        ]
+
+        if hasattr(chat_history, "setHtml"):
+            chat_history.setHtml("\n".join(rendered_messages))
+        elif hasattr(chat_history, "clear") and hasattr(chat_history, "append"):
+            chat_history.clear()
+            for rendered_message in rendered_messages:
+                chat_history.append(rendered_message)
+        elif hasattr(chat_history, "append") and rendered_messages:
+            chat_history.append(rendered_messages[-1])
+
+        if hasattr(chat_history, "verticalScrollBar"):
+            scroll_bar = chat_history.verticalScrollBar()
+            if scroll_bar is not None and hasattr(scroll_bar, "setValue") and hasattr(scroll_bar, "maximum"):
+                scroll_bar.setValue(scroll_bar.maximum())
+
+    def _discard_streaming_message(self):
+        messages = self._display_messages()
+        streaming_index = _safe_instance_value(self, "_streaming_message_index")
+        if isinstance(streaming_index, int) and 0 <= streaming_index < len(messages):
+            del messages[streaming_index]
+        self._reset_stream_state(stop_timer=True)
+
+    def _reset_stream_state(self, stop_timer: bool = False):
+        self._streaming_message_index = None
+        self._stream_render_pending = False
+        if stop_timer:
+            stream_timer = _safe_instance_value(self, "stream_render_timer")
+            if stream_timer is not None and hasattr(stream_timer, "stop"):
+                stream_timer.stop()
 
     def finish_inference(self, status_text: str):
         self.is_inference_running = False

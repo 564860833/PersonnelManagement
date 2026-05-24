@@ -1,7 +1,12 @@
 import unittest
 from unittest.mock import patch
 
-from services.ai_context import GIB, HardwareSnapshot, recommend_context_length
+from services.ai_context import (
+    GIB,
+    HardwareSnapshot,
+    clear_context_recommendation_cache,
+    recommend_context_length,
+)
 
 
 class FakeShowResponse:
@@ -26,6 +31,9 @@ def hardware(total_gib, available_gib=None, vram_gib=None):
 
 
 class AIContextRecommendationTests(unittest.TestCase):
+    def setUp(self):
+        clear_context_recommendation_cache()
+
     def test_recommends_low_context_for_low_memory_device(self):
         recommendation = recommend_context_length(
             hardware=hardware(6, available_gib=6),
@@ -120,6 +128,65 @@ class AIContextRecommendationTests(unittest.TestCase):
         self.assertEqual(8192, recommendation.n_ctx)
         self.assertEqual(8192, recommendation.model_limit)
         self.assertEqual({"model": "deepseek-r1:14b"}, post.call_args.kwargs["json"])
+
+    def test_detect_hardware_is_cached_for_implicit_recommendations(self):
+        snapshot = hardware(16, available_gib=16, vram_gib=4)
+
+        with patch("services.ai_context.detect_hardware", return_value=snapshot) as detect:
+            first = recommend_context_length(fetch_model_limit=False)
+            second = recommend_context_length(fetch_model_limit=False)
+
+        self.assertEqual(1, detect.call_count)
+        self.assertEqual(first.n_ctx, second.n_ctx)
+        self.assertEqual(snapshot, first.hardware)
+        self.assertEqual(snapshot, second.hardware)
+
+    def test_model_context_limit_is_cached_per_model_name(self):
+        show_payload = {"model_info": {"qwen2.context_length": 8192}}
+        snapshot = hardware(32, available_gib=32, vram_gib=8)
+
+        with patch("services.ai_context.requests.post", return_value=FakeShowResponse(show_payload)) as post:
+            first = recommend_context_length(
+                model_name="deepseek-r1:14b",
+                hardware=snapshot,
+            )
+            second = recommend_context_length(
+                model_name="deepseek-r1:14b",
+                hardware=snapshot,
+            )
+
+        self.assertEqual(1, post.call_count)
+        self.assertEqual(8192, first.model_limit)
+        self.assertEqual(8192, second.model_limit)
+
+    def test_model_context_limit_cache_is_separate_per_model_name(self):
+        first_payload = {"model_info": {"qwen2.context_length": 4096}}
+        second_payload = {"model_info": {"qwen2.context_length": 8192}}
+        snapshot = hardware(32, available_gib=32, vram_gib=8)
+
+        with patch("services.ai_context.requests.post", side_effect=[
+            FakeShowResponse(first_payload),
+            FakeShowResponse(second_payload),
+        ]) as post:
+            first = recommend_context_length(model_name="model-a", hardware=snapshot)
+            second = recommend_context_length(model_name="model-b", hardware=snapshot)
+
+        self.assertEqual(2, post.call_count)
+        self.assertEqual(4096, first.model_limit)
+        self.assertEqual(8192, second.model_limit)
+
+    def test_clear_context_recommendation_cache_resets_implicit_detection_and_model_cache(self):
+        snapshot = hardware(16, available_gib=16, vram_gib=4)
+        show_payload = {"model_info": {"qwen2.context_length": 8192}}
+
+        with patch("services.ai_context.detect_hardware", return_value=snapshot) as detect, \
+                patch("services.ai_context.requests.post", return_value=FakeShowResponse(show_payload)) as post:
+            recommend_context_length(model_name="deepseek-r1:14b")
+            clear_context_recommendation_cache()
+            recommend_context_length(model_name="deepseek-r1:14b")
+
+        self.assertEqual(2, detect.call_count)
+        self.assertEqual(2, post.call_count)
 
 
 if __name__ == "__main__":

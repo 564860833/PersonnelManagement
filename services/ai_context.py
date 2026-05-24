@@ -6,7 +6,7 @@ import os
 import re
 import subprocess
 from dataclasses import dataclass
-from typing import Any, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import requests
 
@@ -19,6 +19,9 @@ GIB = 1024 ** 3
 DEFAULT_CONTEXT_LENGTH = 4096
 MIN_CONTEXT_LENGTH = 2048
 TOKENS_PER_EFFECTIVE_GIB = 512
+
+_cached_hardware_snapshot: Optional["HardwareSnapshot"] = None
+_model_context_limit_cache: Dict[str, int] = {}
 
 
 @dataclass(frozen=True)
@@ -44,13 +47,13 @@ def recommend_context_length(
     fetch_model_limit: bool = True,
     timeout: float = 2.0,
 ) -> ContextRecommendation:
-    snapshot = hardware or detect_hardware()
+    snapshot = hardware if hardware is not None else _cached_hardware_snapshot_or_detect()
     hardware_max_n_ctx = _recommend_from_hardware(snapshot)
     n_ctx = _apply_available_memory_cap(hardware_max_n_ctx, snapshot.available_memory_bytes)
 
     resolved_model_limit = model_limit
     if resolved_model_limit is None and fetch_model_limit and _is_real_model_name(model_name):
-        resolved_model_limit = fetch_model_context_limit(model_name, timeout=timeout)
+        resolved_model_limit = _cached_model_context_limit(model_name, timeout=timeout)
 
     if resolved_model_limit and resolved_model_limit > 0:
         n_ctx = min(n_ctx, resolved_model_limit)
@@ -63,6 +66,33 @@ def recommend_context_length(
         max_n_ctx=max(1, int(hardware_max_n_ctx)),
         model_limit=resolved_model_limit,
     )
+
+
+def clear_context_recommendation_cache():
+    """Clear process-local hardware and model context-limit caches."""
+    global _cached_hardware_snapshot
+    _cached_hardware_snapshot = None
+    _model_context_limit_cache.clear()
+
+
+def _cached_hardware_snapshot_or_detect() -> HardwareSnapshot:
+    global _cached_hardware_snapshot
+    if _cached_hardware_snapshot is None:
+        _cached_hardware_snapshot = detect_hardware()
+    return _cached_hardware_snapshot
+
+
+def _cached_model_context_limit(model_name: str, timeout: float = 2.0) -> Optional[int]:
+    model_name = (model_name or "").strip()
+    if not model_name:
+        return None
+    if model_name in _model_context_limit_cache:
+        return _model_context_limit_cache[model_name]
+
+    model_limit = fetch_model_context_limit(model_name, timeout=timeout)
+    if model_limit and model_limit > 0:
+        _model_context_limit_cache[model_name] = int(model_limit)
+    return model_limit
 
 
 def detect_hardware() -> HardwareSnapshot:

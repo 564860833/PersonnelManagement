@@ -1,7 +1,7 @@
 """Direct Ollama chat helper for the AI assistant."""
 
 import json
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 import requests
 
@@ -39,13 +39,29 @@ def build_messages(
     analysis_payload: dict,
     history_messages: Optional[Sequence[Dict[str, str]]] = None,
 ) -> List[Dict[str, str]]:
+    return _build_messages_from_analysis_data_json(
+        question,
+        build_analysis_data_json(analysis_payload),
+        history_messages,
+    )
+
+
+def build_analysis_data_json(analysis_payload: dict) -> str:
     data = {
-        "tables": _tables_for_prompt(analysis_payload.get("tables") or {}),
+        "tables": _tables_for_prompt((analysis_payload or {}).get("tables") or {}),
     }
+    return _to_json(data)
+
+
+def _build_messages_from_analysis_data_json(
+    question: str,
+    analysis_data_json: str,
+    history_messages: Optional[Sequence[Dict[str, str]]] = None,
+) -> List[Dict[str, str]]:
     user_prompt = (
         "以下是本次分析依赖的当前筛选数据：\n"
         "<data>\n"
-        f"{_to_json(data)}\n"
+        f"{analysis_data_json}\n"
         "</data>\n\n"
         "请基于上述数据，回答以下问题：\n"
         "<question>\n"
@@ -65,18 +81,41 @@ def ask_model(
     n_ctx: int = 4096,
     timeout: float = 120.0,
     history_messages: Optional[Sequence[Dict[str, str]]] = None,
+    analysis_data_json: Optional[str] = None,
 ) -> str:
     model_name = (model_name or "").strip()
     if not model_name:
         raise ValueError("未选择可用模型。")
 
-    answer_content = _post_chat(
-        model_name,
-        build_messages(question, analysis_payload, history_messages),
-        n_ctx,
-        timeout,
+    messages = (
+        build_messages(question, analysis_payload, history_messages)
+        if analysis_data_json is None
+        else _build_messages_from_analysis_data_json(question, analysis_data_json, history_messages)
     )
+    answer_content = _post_chat(model_name, messages, n_ctx, timeout)
     return str(answer_content).strip()
+
+
+def ask_model_stream(
+    question: str,
+    analysis_payload: dict,
+    model_name: str,
+    n_ctx: int = 4096,
+    timeout: float = 120.0,
+    history_messages: Optional[Sequence[Dict[str, str]]] = None,
+    on_delta: Optional[Callable[[str], None]] = None,
+    analysis_data_json: Optional[str] = None,
+) -> str:
+    model_name = (model_name or "").strip()
+    if not model_name:
+        raise ValueError("未选择可用模型。")
+
+    messages = (
+        build_messages(question, analysis_payload, history_messages)
+        if analysis_data_json is None
+        else _build_messages_from_analysis_data_json(question, analysis_data_json, history_messages)
+    )
+    return _post_chat_stream(model_name, messages, n_ctx, timeout, on_delta=on_delta)
 
 
 def is_context_length_error(error: Exception) -> bool:
@@ -97,6 +136,66 @@ def _post_chat(model_name: str, messages: List[Dict[str, str]], n_ctx: int, time
     )
     response.raise_for_status()
     return str(response.json().get("message", {}).get("content", "")).strip()
+
+
+def _post_chat_stream(
+    model_name: str,
+    messages: List[Dict[str, str]],
+    n_ctx: int,
+    timeout: float,
+    on_delta: Optional[Callable[[str], None]] = None,
+) -> str:
+    response = requests.post(
+        ollama_api_url("/api/chat"),
+        json={
+            "model": model_name,
+            "messages": messages,
+            "stream": True,
+            "options": {"num_ctx": n_ctx},
+        },
+        timeout=timeout,
+        stream=True,
+    )
+    try:
+        response.raise_for_status()
+        chunks = []
+        for line in response.iter_lines(decode_unicode=True):
+            if not line:
+                continue
+            data = _parse_stream_line(line)
+            if data.get("error"):
+                raise RuntimeError(str(data.get("error")))
+
+            delta = _stream_delta_content(data)
+            if delta:
+                chunks.append(delta)
+                if on_delta is not None:
+                    on_delta(delta)
+
+            if data.get("done"):
+                break
+        return "".join(chunks).strip()
+    finally:
+        response.close()
+
+
+def _parse_stream_line(line: str) -> dict:
+    try:
+        data = json.loads(line)
+    except (TypeError, json.JSONDecodeError) as e:
+        raise RuntimeError(f"Invalid Ollama stream response: {line}") from e
+    if not isinstance(data, dict):
+        raise RuntimeError(f"Invalid Ollama stream response: {line}")
+    return data
+
+
+def _stream_delta_content(data: dict) -> str:
+    message = data.get("message")
+    if isinstance(message, dict):
+        return str(message.get("content") or "")
+    if "response" in data:
+        return str(data.get("response") or "")
+    return ""
 
 
 def _error_texts(error: Exception) -> List[str]:

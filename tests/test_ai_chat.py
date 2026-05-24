@@ -12,7 +12,7 @@ from PyQt5.QtCore import QPoint, Qt
 from PyQt5.QtWidgets import QApplication, QComboBox, QWidget
 
 from services.ai_context import ContextRecommendation, HardwareSnapshot
-from services.ai_direct import ask_model, build_messages
+from services.ai_direct import ask_model, ask_model_stream, build_analysis_data_json, build_messages
 from ui.ai_chat import (
     AI_CHAT_STYLE,
     AIChatDialog,
@@ -102,6 +102,25 @@ class FakeResponse:
 
     def json(self):
         return {"message": {"content": self.content}}
+
+
+class FakeStreamingResponse:
+    def __init__(self, lines):
+        self.lines = list(lines)
+        self.closed = False
+
+    def raise_for_status(self):
+        return None
+
+    def iter_lines(self, decode_unicode=False):
+        for line in self.lines:
+            if decode_unicode or isinstance(line, str):
+                yield line
+            else:
+                yield line.encode("utf-8")
+
+    def close(self):
+        self.closed = True
 
 
 class FakeOllamaStatus:
@@ -270,6 +289,9 @@ class FakeHistory:
         self.items = []
         self.scroll_bar = FakeScrollBar()
 
+    def clear(self):
+        self.items = []
+
     def append(self, html):
         self.items.append(html)
 
@@ -290,6 +312,26 @@ class FakeCheck:
 
     def setEnabled(self, enabled):
         self.enabled = enabled
+
+
+class FakeTimer:
+    def __init__(self):
+        self.started = False
+        self.stopped = False
+        self.interval = None
+        self.timeout = FakeSignal()
+
+    def setSingleShot(self, value):
+        return None
+
+    def setInterval(self, value):
+        self.interval = value
+
+    def start(self):
+        self.started = True
+
+    def stop(self):
+        self.stopped = True
 
 
 class TestAIChatDialogBehavior(unittest.TestCase):
@@ -329,8 +371,13 @@ class TestAIChatDialogBehavior(unittest.TestCase):
         dialog.enabled_tables = {}
         dialog._selected_payload_cache_key = None
         dialog._selected_payload_cache = None
+        dialog._selected_data_json_cache_key = None
+        dialog._selected_data_json_cache_value = None
         dialog._payload_token_cache_key = None
         dialog._payload_token_cache_value = None
+        dialog._chat_display_messages = []
+        dialog._streaming_message_index = None
+        dialog._stream_render_pending = False
         dialog._pressure_refresh_pending = False
         dialog.pressure_timer = type(
             "FakeTimer",
@@ -344,6 +391,7 @@ class TestAIChatDialogBehavior(unittest.TestCase):
                 "start": lambda self: setattr(self, "started", True),
             },
         )()
+        dialog.stream_render_timer = FakeTimer()
         dialog.pressure_bar = FakeWidget()
         dialog.pressure_bar.setValue = lambda value: setattr(dialog.pressure_bar, "value", value)
         dialog.pressure_bar.setProperty = lambda key, value: dialog.pressure_bar.properties.__setitem__(key, value)
@@ -795,6 +843,24 @@ class TestAIChatDialogBehavior(unittest.TestCase):
             self.assertEqual(2, payload_filter.call_count)
             self.assertIn("department", updated_payload["tables"]["base_info"]["field_labels"])
 
+    def test_selected_analysis_data_json_reuses_cache_until_selection_changes(self):
+        dialog = self.make_dialog()
+        page = self.build_page(dialog)
+
+        with patch("ui.ai_chat.build_analysis_data_json", wraps=build_analysis_data_json) as build_json:
+            first_json = dialog.selected_analysis_data_json()
+            second_json = dialog.selected_analysis_data_json()
+
+            self.assertEqual(first_json, second_json)
+            self.assertEqual(1, build_json.call_count)
+
+            page.checkboxes["department"].setChecked(True)
+            dialog.on_table_selection_changed("base_info")
+            updated_json = dialog.selected_analysis_data_json()
+
+            self.assertNotEqual(first_json, updated_json)
+            self.assertEqual(2, build_json.call_count)
+
     def test_context_pressure_reuses_token_estimate_for_same_selection(self):
         dialog = self.make_dialog()
         self.build_page(dialog)
@@ -958,6 +1024,157 @@ class TestAIChatDialogBehavior(unittest.TestCase):
         self.assertFalse(page.all_btn.isEnabled())
         self.assertFalse(page.reset_btn.isEnabled())
 
+    def make_ai_payload_query_tab(self, permissions=None):
+        tab = QueryTab.__new__(QueryTab)
+        tab.permissions = permissions or {
+            "base_info": True,
+            "rewards": False,
+            "family": False,
+            "resume": False,
+        }
+        tab._last_query_conditions = {}
+        tab._ai_payload_cache = {}
+        return tab
+
+    def make_payload_db(self):
+        class FakePayloadDb:
+            def __init__(self):
+                self.search_calls = []
+                self.closed_count = 0
+
+            def get_assessment_years(self):
+                return []
+
+            def search_personnel(self, **kwargs):
+                self.search_calls.append(dict(kwargs))
+                table_name = kwargs["table_name"]
+                return {
+                    table_name: [
+                        {
+                            "sequence": len(self.search_calls),
+                            "name": "P",
+                        }
+                    ],
+                    "total_count": 1,
+                }
+
+            def close(self):
+                self.closed_count += 1
+
+        return FakePayloadDb()
+
+    def test_ai_payload_cache_reuses_same_query_permissions_and_db_signature(self):
+        tab = self.make_ai_payload_query_tab()
+        db = self.make_payload_db()
+        signature = (("db", True, 10, 100), ("db-wal", False, 0, 0), ("db-shm", False, 0, 0))
+
+        with patch("ui.query.Database", return_value=db), \
+                patch.object(QueryTab, "_ai_database_signature", return_value=signature):
+            first = QueryTab.build_full_ai_analysis_payload(tab, {})
+            second = QueryTab.build_full_ai_analysis_payload(tab, {})
+
+        self.assertIs(first, second)
+        self.assertEqual(1, len(db.search_calls))
+        self.assertEqual(1, db.closed_count)
+
+    def test_ai_payload_cache_rebuilds_when_query_conditions_change(self):
+        tab = self.make_ai_payload_query_tab()
+        db = self.make_payload_db()
+        signature = (("db", True, 10, 100), ("db-wal", False, 0, 0), ("db-shm", False, 0, 0))
+
+        with patch("ui.query.Database", return_value=db), \
+                patch.object(QueryTab, "_ai_database_signature", return_value=signature):
+            first = QueryTab.build_full_ai_analysis_payload(tab, {})
+            second = QueryTab.build_full_ai_analysis_payload(tab, {"name": "P"})
+
+        self.assertIsNot(first, second)
+        self.assertEqual(2, len(db.search_calls))
+
+    def test_ai_payload_cache_rebuilds_when_permissions_change(self):
+        tab = self.make_ai_payload_query_tab()
+        db = self.make_payload_db()
+        signature = (("db", True, 10, 100), ("db-wal", False, 0, 0), ("db-shm", False, 0, 0))
+
+        with patch("ui.query.Database", return_value=db), \
+                patch.object(QueryTab, "_ai_database_signature", return_value=signature):
+            first = QueryTab.build_full_ai_analysis_payload(tab, {})
+            tab.permissions = {
+                "base_info": True,
+                "rewards": False,
+                "family": True,
+                "resume": False,
+            }
+            second = QueryTab.build_full_ai_analysis_payload(tab, {})
+
+        self.assertIsNot(first, second)
+        self.assertEqual(3, len(db.search_calls))
+        self.assertEqual("family", db.search_calls[-1]["table_name"])
+
+    def test_ai_payload_cache_rebuilds_when_database_signature_changes(self):
+        tab = self.make_ai_payload_query_tab()
+        db = self.make_payload_db()
+        first_signature = (("db", True, 10, 100), ("db-wal", False, 0, 0), ("db-shm", False, 0, 0))
+        second_signature = (("db", True, 20, 200), ("db-wal", False, 0, 0), ("db-shm", False, 0, 0))
+
+        with patch("ui.query.Database", return_value=db), \
+                patch.object(
+                    QueryTab,
+                    "_ai_database_signature",
+                    side_effect=[first_signature, first_signature, second_signature, second_signature],
+                ):
+            first = QueryTab.build_full_ai_analysis_payload(tab, {})
+            second = QueryTab.build_full_ai_analysis_payload(tab, {})
+
+        self.assertIsNot(first, second)
+        self.assertEqual(2, len(db.search_calls))
+
+    def test_ai_payload_cache_skips_store_when_database_changes_during_build(self):
+        tab = self.make_ai_payload_query_tab()
+        db = self.make_payload_db()
+        first_signature = (("db", True, 10, 100), ("db-wal", False, 0, 0), ("db-shm", False, 0, 0))
+        second_signature = (("db", True, 20, 200), ("db-wal", False, 0, 0), ("db-shm", False, 0, 0))
+
+        with patch("ui.query.Database", return_value=db), \
+                patch.object(
+                    QueryTab,
+                    "_ai_database_signature",
+                    side_effect=[first_signature, second_signature, second_signature, second_signature],
+                ):
+            first = QueryTab.build_full_ai_analysis_payload(tab, {})
+            second = QueryTab.build_full_ai_analysis_payload(tab, {})
+
+        self.assertIsNot(first, second)
+        self.assertEqual(2, len(db.search_calls))
+
+    def test_clear_results_invalidates_ai_payload_cache(self):
+        tab = self.make_ai_payload_query_tab()
+        tab.current_total_counts = {}
+        tab.current_results = []
+        tab.current_results_dict = {}
+        tab.current_table_name = "base_info"
+        tab.current_page = 1
+        tab.ai_dialog = None
+        tab._pending_ai_sync_conditions = None
+        tab._ai_sync_generation = 0
+        tab.update_pagination_controls = lambda *_args: None
+        tab.update_table_buttons = lambda *_args: None
+
+        class FakeModel:
+            def clear(self):
+                pass
+
+        tab.result_model = FakeModel()
+        db = self.make_payload_db()
+        signature = (("db", True, 10, 100), ("db-wal", False, 0, 0), ("db-shm", False, 0, 0))
+
+        with patch("ui.query.Database", return_value=db), \
+                patch.object(QueryTab, "_ai_database_signature", return_value=signature):
+            QueryTab.build_full_ai_analysis_payload(tab, {})
+            QueryTab.clear_results(tab)
+            QueryTab.build_full_ai_analysis_payload(tab, {})
+
+        self.assertEqual(2, len(db.search_calls))
+
 
 class AIChatDirectModelTests(unittest.TestCase):
     def test_chat_dialog_uses_direct_model_and_column_selection(self):
@@ -971,18 +1188,22 @@ class AIChatDirectModelTests(unittest.TestCase):
         )
 
         self.assertIn("AIWorker", source)
-        self.assertIn("ask_model", source)
+        self.assertIn("ask_model_stream", source)
         self.assertIn("recommend_context_length", source)
         self.assertIn("selected_analysis_payload", source)
+        self.assertIn("selected_analysis_data_json", source)
+        self.assertIn("build_analysis_data_json", source)
         self.assertIn("filter_analysis_payload_by_columns", source)
         self.assertNotIn("build_schema_selection_messages", source)
         self.assertNotIn("AIQueryEngine", source)
 
     def test_ai_worker_passes_auto_context_to_direct_model(self):
         history = [{"role": "user", "content": "上一轮问题"}]
-        worker = AIWorker("继续分析", payload(), "qwen2:latest", 8192, history)
+        worker = AIWorker("继续分析", payload(), "qwen2:latest", 8192, history, analysis_data_json='{"tables":[]}')
+        deltas = []
+        worker.delta.connect(deltas.append)
 
-        with patch("ui.ai_chat.ask_model", return_value="OK") as ask:
+        with patch("ui.ai_chat.ask_model_stream", return_value="OK") as ask:
             worker.run()
 
         ask.assert_called_once()
@@ -992,6 +1213,26 @@ class AIChatDirectModelTests(unittest.TestCase):
         self.assertEqual("qwen2:latest", args[2])
         self.assertEqual(8192, args[3])
         self.assertEqual(history, kwargs["history_messages"])
+        self.assertEqual('{"tables":[]}', kwargs["analysis_data_json"])
+        self.assertEqual([], deltas)
+
+    def test_ai_worker_emits_streaming_delta_and_final_answer(self):
+        worker = AIWorker("继续分析", payload(), "qwen2:latest", 8192, analysis_data_json='{"tables":[]}')
+        deltas = []
+        finished = []
+        worker.delta.connect(deltas.append)
+        worker.finished.connect(finished.append)
+
+        def fake_stream(*args, **kwargs):
+            kwargs["on_delta"]("A")
+            kwargs["on_delta"]("B")
+            return "AB"
+
+        with patch("ui.ai_chat.ask_model_stream", side_effect=fake_stream):
+            worker.run()
+
+        self.assertEqual(["A", "B"], deltas)
+        self.assertEqual(["AB"], finished)
 
     def test_ai_worker_context_errors_fail_without_auto_retry(self):
         worker = AIWorker("继续分析", payload(), "qwen2:latest", 2048)
@@ -1001,7 +1242,7 @@ class AIChatDirectModelTests(unittest.TestCase):
         worker.finished.connect(finished.append)
 
         with patch(
-            "ui.ai_chat.ask_model",
+            "ui.ai_chat.ask_model_stream",
             side_effect=RuntimeError("context length exceeded"),
         ) as ask, patch("ui.ai_chat.logger.exception"):
             worker.run()
@@ -1013,7 +1254,7 @@ class AIChatDirectModelTests(unittest.TestCase):
     def test_ai_worker_does_not_retry_non_context_errors(self):
         worker = AIWorker("继续分析", payload(), "qwen2:latest", 2048)
 
-        with patch("ui.ai_chat.ask_model", side_effect=RuntimeError("network failed")) as ask, \
+        with patch("ui.ai_chat.ask_model_stream", side_effect=RuntimeError("network failed")) as ask, \
                 patch("ui.ai_chat.logger.exception"):
             worker.run()
 
@@ -1026,12 +1267,42 @@ class AIChatDirectModelTests(unittest.TestCase):
         worker.failed.connect(failures.append)
         worker.finished.connect(finished.append)
 
-        with patch("ui.ai_chat.ask_model", side_effect=RuntimeError("network failed")), \
+        with patch("ui.ai_chat.ask_model_stream", side_effect=RuntimeError("network failed")), \
                 patch("ui.ai_chat.logger.exception"):
             worker.run()
 
         self.assertEqual(["network failed"], failures)
         self.assertEqual([], finished)
+
+    def test_stream_delta_updates_single_assistant_message_and_final_response(self):
+        dialog = self.make_chat_dialog_stub()
+        dialog.history_messages = [{"role": "user", "content": "上一轮问题"}]
+        dialog._pending_history_length = 1
+        dialog.history_messages.append({"role": "user", "content": "本轮问题"})
+        dialog.is_inference_running = True
+        AIChatDialog.append_message(dialog, "user", "本轮问题")
+
+        AIChatDialog.handle_stream_delta(dialog, "A")
+        AIChatDialog.handle_stream_delta(dialog, "B")
+
+        self.assertTrue(dialog.stream_render_timer.started)
+        self.assertEqual(2, len(dialog.chat_history.items))
+        self.assertIn("A", dialog._chat_display_messages[1]["content"])
+        self.assertIn("AB", dialog._chat_display_messages[1]["content"])
+
+        AIChatDialog.handle_response(dialog, "AB")
+
+        self.assertEqual(2, len(dialog.chat_history.items))
+        self.assertIn("AB", dialog.chat_history.items[-1])
+        self.assertEqual(
+            [
+                {"role": "user", "content": "上一轮问题"},
+                {"role": "user", "content": "本轮问题"},
+                {"role": "assistant", "content": "AB"},
+            ],
+            dialog.history_messages,
+        )
+        self.assertFalse(dialog._stream_render_pending)
 
     def test_user_message_renders_as_right_blue_bubble(self):
         rendered = render_message_html("user", "<script>alert(1)</script>")
@@ -1534,8 +1805,14 @@ class AIChatDirectModelTests(unittest.TestCase):
         dialog.context_options = [2048, 4096]
         dialog._selected_payload_cache_key = None
         dialog._selected_payload_cache = None
+        dialog._selected_data_json_cache_key = None
+        dialog._selected_data_json_cache_value = None
         dialog._payload_token_cache_key = None
         dialog._payload_token_cache_value = None
+        dialog._chat_display_messages = []
+        dialog._streaming_message_index = None
+        dialog._stream_render_pending = False
+        dialog.stream_render_timer = FakeTimer()
         dialog.enabled_tables = {}
         dialog.column_checks = {
             "base_info": {
@@ -1562,20 +1839,29 @@ class AIChatDirectModelTests(unittest.TestCase):
         dialog.current_context_n_ctx = 8192
 
         class FakeThread:
-            def __init__(self, target):
-                self.target = target
-                self.daemon = False
-                self.started = False
+            def __init__(self, *_args):
+                self.started = FakeSignal()
+                self.finished = FakeSignal()
+                self.start_called = False
+                self.quit_called = False
+
+            def quit(self):
+                self.quit_called = True
 
             def start(self):
-                self.started = True
+                self.start_called = True
 
-        with patch("ui.ai_chat.threading.Thread", FakeThread):
+            def deleteLater(self):
+                pass
+
+        with patch("ui.ai_chat.QThread", FakeThread), \
+                patch.object(AIWorker, "moveToThread", lambda *_args: None):
             AIChatDialog.start_inference(dialog)
 
         self.assertIsNotNone(dialog.worker)
         self.assertEqual(8192, dialog.worker.n_ctx)
-        self.assertTrue(dialog.worker_thread.started)
+        self.assertIsNotNone(dialog.worker.analysis_data_json)
+        self.assertTrue(dialog.worker_thread.start_called)
 
     def test_handle_error_does_not_store_error_as_assistant_history(self):
         dialog = self.make_chat_dialog_stub()
@@ -1608,6 +1894,80 @@ class AIChatDirectModelTests(unittest.TestCase):
             dialog.history_messages,
         )
         self.assertIsNone(dialog._pending_history_length)
+
+    def test_stream_error_discards_partial_and_rolls_back_history(self):
+        dialog = self.make_chat_dialog_stub()
+        dialog.history_messages = [{"role": "user", "content": "上一轮问题"}]
+        dialog._pending_history_length = 1
+        dialog.history_messages.append({"role": "user", "content": "本轮问题"})
+        dialog.is_inference_running = True
+        AIChatDialog.append_message(dialog, "user", "本轮问题")
+        AIChatDialog.handle_stream_delta(dialog, "partial")
+
+        AIChatDialog.handle_error(dialog, "network failed")
+
+        self.assertEqual([{"role": "user", "content": "上一轮问题"}], dialog.history_messages)
+        rendered = "\n".join(dialog.chat_history.items)
+        self.assertNotIn("partial", rendered)
+        self.assertIn("network failed", rendered)
+        self.assertIn("本轮问题", rendered)
+        self.assertTrue(dialog.send_btn.enabled)
+
+    def test_ask_model_accepts_pre_serialized_data_json(self):
+        serialized = '{"tables":[{"table_name":"base_info","table_label":"人员基本信息","fields":[],"rows":[]}]}'
+
+        with patch("services.ai_direct.build_analysis_data_json", side_effect=AssertionError("should reuse")), \
+                patch("services.ai_direct.requests.post", return_value=FakeResponse("正式分析结果")) as post:
+            answer = ask_model(
+                "按部门分析",
+                payload(),
+                "qwen2:latest",
+                n_ctx=8192,
+                timeout=5,
+                analysis_data_json=serialized,
+            )
+
+        self.assertEqual("正式分析结果", answer)
+        prompt_text = "\n".join(message["content"] for message in post.call_args.kwargs["json"]["messages"])
+        self.assertIn(serialized, prompt_text)
+
+    def test_ask_model_stream_posts_streaming_payload_and_emits_deltas(self):
+        lines = [
+            json.dumps({"message": {"content": "A"}, "done": False}, ensure_ascii=False),
+            json.dumps({"message": {"content": "B"}, "done": False}, ensure_ascii=False),
+            json.dumps({"done": True}, ensure_ascii=False),
+        ]
+        response = FakeStreamingResponse(lines)
+        deltas = []
+
+        with patch("services.ai_direct.requests.post", return_value=response) as post:
+            answer = ask_model_stream(
+                "按部门分析",
+                payload(),
+                "qwen2:latest",
+                n_ctx=8192,
+                timeout=5,
+                on_delta=deltas.append,
+                analysis_data_json='{"tables":[]}',
+            )
+
+        self.assertEqual("AB", answer)
+        self.assertEqual(["A", "B"], deltas)
+        body = post.call_args.kwargs["json"]
+        self.assertEqual("qwen2:latest", body["model"])
+        self.assertTrue(body["stream"])
+        self.assertEqual({"num_ctx": 8192}, body["options"])
+        self.assertTrue(post.call_args.kwargs["stream"])
+        self.assertTrue(response.closed)
+
+    def test_ask_model_stream_raises_chunk_error(self):
+        response = FakeStreamingResponse([json.dumps({"error": "boom"}, ensure_ascii=False)])
+
+        with patch("services.ai_direct.requests.post", return_value=response):
+            with self.assertRaisesRegex(RuntimeError, "boom"):
+                ask_model_stream("按部门分析", payload(), "qwen2:latest", timeout=5)
+
+        self.assertTrue(response.closed)
 
 
 if __name__ == "__main__":

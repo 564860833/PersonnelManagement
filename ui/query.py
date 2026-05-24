@@ -1,5 +1,6 @@
 import re
 import logging
+from pathlib import Path
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
@@ -44,6 +45,8 @@ from services.ollama_manager import ensure_ollama_ready
 
 logger = logging.getLogger('QueryTab')
 
+DB_SIGNATURE_SUFFIXES = ("", "-wal", "-shm")
+
 
 def _safe_instance_attr(obj, name: str, default=None):
     try:
@@ -51,6 +54,35 @@ def _safe_instance_attr(obj, name: str, default=None):
     except Exception:
         return default
     return instance_dict.get(name, default)
+
+
+def _freeze_cache_value(value):
+    if isinstance(value, dict):
+        return tuple(
+            (str(key), _freeze_cache_value(value[key]))
+            for key in sorted(value.keys(), key=lambda item: str(item))
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_cache_value(item) for item in value)
+    if isinstance(value, set):
+        return tuple(sorted((_freeze_cache_value(item) for item in value), key=repr))
+    return value
+
+
+def _file_signature(path: Path) -> tuple:
+    try:
+        stat = path.stat()
+        return True, int(stat.st_size), int(stat.st_mtime_ns)
+    except OSError:
+        return False, 0, 0
+
+
+def database_file_signature(db_path) -> tuple:
+    base_path_text = str(db_path)
+    return tuple(
+        (base_path_text + suffix, *_file_signature(Path(base_path_text + suffix)))
+        for suffix in DB_SIGNATURE_SUFFIXES
+    )
 
 
 def build_ai_analysis_payload(results_dict: dict, permissions: dict, assessment_years=None) -> dict:
@@ -677,6 +709,7 @@ class QueryTab(QWidget):
         self._ai_sync_generation = 0
         self._pending_ai_sync_conditions = None
         self._ai_sync_tasks = []
+        self._ai_payload_cache = {}
         self.current_table_name = 'base_info'
         self._query_state = {}
         self._restoring_query_state = False
@@ -1099,6 +1132,31 @@ class QueryTab(QWidget):
             return None
         return dict(query_conditions)
 
+    def invalidate_ai_payload_cache(self):
+        self._ai_payload_cache = {}
+
+    def _ai_payload_cache_store(self):
+        cache = _safe_instance_attr(self, "_ai_payload_cache")
+        if cache is None:
+            self._ai_payload_cache = {}
+            cache = self._ai_payload_cache
+        return cache
+
+    def _ai_payload_cache_key(self, query_conditions: dict, db_signature: tuple) -> tuple:
+        permissions = normalize_permissions(self.permissions)
+        permission_key = tuple(
+            (table_name, bool(permissions.get(table_name)))
+            for table_name in TABLE_LABELS.keys()
+        )
+        return (
+            _freeze_cache_value(query_conditions or {}),
+            permission_key,
+            db_signature,
+        )
+
+    def _ai_database_signature(self) -> tuple:
+        return database_file_signature(config.DB_PATH)
+
     def get_table_total_count(self, table_name: str, query_conditions=None) -> int:
         """按最后一次查询条件获取指定表的总行数。"""
         conditions = self._snapshot_query_conditions(query_conditions)
@@ -1220,6 +1278,7 @@ class QueryTab(QWidget):
 
     def clear_results(self):
         """清空当前查询缓存和结果表格。"""
+        self.invalidate_ai_payload_cache()
         self.current_results_dict = {}
         self.current_total_counts = {}
         self._last_query_conditions = None
@@ -1282,6 +1341,12 @@ class QueryTab(QWidget):
         if query_conditions is None:
             return build_ai_analysis_payload({}, self.permissions, [])
 
+        before_signature = self._ai_database_signature()
+        cache_key = self._ai_payload_cache_key(query_conditions, before_signature)
+        cache = self._ai_payload_cache_store()
+        if cache_key in cache:
+            return cache[cache_key]
+
         db = Database(config.DB_PATH)
         try:
             assessment_years = db.get_assessment_years() or []
@@ -1291,9 +1356,14 @@ class QueryTab(QWidget):
                     continue
                 table_results = db.search_personnel(table_name=table_name, **query_conditions)
                 full_results[table_name] = table_results.get(table_name, [])
-            return build_ai_analysis_payload(full_results, self.permissions, assessment_years)
+            analysis_payload = build_ai_analysis_payload(full_results, self.permissions, assessment_years)
         finally:
             db.close()
+
+        after_signature = self._ai_database_signature()
+        if before_signature == after_signature:
+            cache[cache_key] = analysis_payload
+        return analysis_payload
 
     def handle_ai_analysis_payload(self, analysis_payload):
         """检查 AI 数据并沿用原有 Ollama 打开流程。"""
