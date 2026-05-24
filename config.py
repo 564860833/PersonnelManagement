@@ -1,4 +1,5 @@
 import logging
+from logging.handlers import RotatingFileHandler
 from PyQt5.QtGui import QFont
 from datetime import datetime
 from pathlib import Path
@@ -26,6 +27,8 @@ class Config:
         # 日志配置
         self.LOG_LEVEL = logging.INFO
         self.LOG_FILE = self.get_log_path()
+        self.LOG_MAX_BYTES = 5 * 1024 * 1024
+        self.LOG_BACKUP_COUNT = 5
 
         # 创建必要日志文件
         self.ensure_log_file_exists()
@@ -78,11 +81,17 @@ class Config:
         # 移除默认处理器（如果有）
         for handler in root_logger.handlers[:]:
             root_logger.removeHandler(handler)
+            handler.close()
 
         # 创建文件处理器并设置UTF-8编码
         formatter = logging.Formatter(self.LOG_FORMAT)
         Path(self.LOG_FILE).parent.mkdir(parents=True, exist_ok=True)
-        file_handler = logging.FileHandler(self.LOG_FILE, encoding='utf-8')
+        file_handler = RotatingFileHandler(
+            self.LOG_FILE,
+            maxBytes=self.LOG_MAX_BYTES,
+            backupCount=self.LOG_BACKUP_COUNT,
+            encoding='utf-8',
+        )
         file_handler.setFormatter(formatter)
         root_logger.addHandler(file_handler)
 

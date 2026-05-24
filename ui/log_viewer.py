@@ -1,7 +1,7 @@
 import os
 import chardet
 import logging
-from PyQt5.QtWidgets import (QDialog, QTextEdit, QPushButton, QVBoxLayout,
+from PyQt5.QtWidgets import (QDialog, QPlainTextEdit, QPushButton, QVBoxLayout,
                              QHBoxLayout, QLabel, QFileDialog, QApplication,
                              QComboBox)
 from PyQt5.QtCore import QTimer
@@ -9,6 +9,8 @@ from PyQt5.QtGui import QFont, QTextCursor
 from ui.styles import DIALOG_BASE_STYLE, DIALOG_BUTTON_STYLE
 
 logger = logging.getLogger('LogViewer')
+
+INITIAL_LOG_TAIL_BYTES = 512 * 1024
 
 
 class LogViewer(QDialog):
@@ -81,10 +83,10 @@ class LogViewer(QDialog):
         layout.addLayout(encoding_layout)
 
         # 日志显示区域
-        self.log_text = QTextEdit()
+        self.log_text = QPlainTextEdit()
         self.log_text.setReadOnly(True)
         self.log_text.setFont(QFont("Consolas", 10))  # 等宽字体适合显示日志
-        self.log_text.setLineWrapMode(QTextEdit.NoWrap)  # 禁用自动换行
+        self.log_text.setLineWrapMode(QPlainTextEdit.NoWrap)  # 禁用自动换行
         layout.addWidget(self.log_text, 1)
 
         # 按钮区域
@@ -186,6 +188,21 @@ class LogViewer(QDialog):
         except Exception as e:
             return f"读取文件失败: {str(e)}"
 
+    def read_initial_file_content(self, file_path, file_size):
+        """Read only the tail of large log files to keep the UI responsive."""
+        if file_size <= INITIAL_LOG_TAIL_BYTES:
+            return self.read_file_content(file_path), 0
+
+        start = max(0, file_size - INITIAL_LOG_TAIL_BYTES)
+        content = self.read_file_content(file_path, start=start, length=INITIAL_LOG_TAIL_BYTES)
+        newline_index = content.find("\n")
+        if newline_index >= 0:
+            content = content[newline_index + 1:]
+
+        omitted_kb = start // 1024
+        prefix = f"已省略前 {omitted_kb} KB 日志，仅显示最近内容。\n\n"
+        return prefix + content, start
+
     def select_log_file(self):
         """选择日志文件"""
         file_path, _ = QFileDialog.getOpenFileName(
@@ -215,14 +232,14 @@ class LogViewer(QDialog):
             self.file_size = stat.st_size
 
             # 读取文件内容
-            content = self.read_file_content(self.log_file_path)
+            content, _loaded_start = self.read_initial_file_content(self.log_file_path, self.file_size)
             self.log_text.setPlainText(content)
             self.last_position = self.file_size
 
             # 滚动到底部
             self.go_to_bottom()
         except Exception as e:
-            self.log_text.append(f"加载日志失败: {str(e)}")
+            self.log_text.appendPlainText(f"加载日志失败: {str(e)}")
 
     def update_logs(self):
         """更新日志内容（增量更新）"""
@@ -259,7 +276,7 @@ class LogViewer(QDialog):
 
                 # 添加到日志显示区域
                 if new_content.strip():
-                    self.log_text.append(new_content)
+                    self.log_text.appendPlainText(new_content)
 
                 # 如果当前在底部，自动滚动
                 scrollbar = self.log_text.verticalScrollBar()
@@ -274,7 +291,7 @@ class LogViewer(QDialog):
 
             self.file_size = new_size
         except Exception as e:
-            self.log_text.append(f"更新日志失败: {str(e)}")
+            self.log_text.appendPlainText(f"更新日志失败: {str(e)}")
 
     def go_to_top(self):
         """滚动到日志顶部"""

@@ -337,10 +337,19 @@ class MainWindow(QMainWindow):
                 f"导出过程中发生严重错误:\n{str(e)}"
             )
     # ============== 新增：日志相关方法 ==============
+    def ensure_admin_log_access(self) -> bool:
+        """Return True only when the current user can manage logs."""
+        if self.is_admin:
+            return True
+        QMessageBox.warning(self, "权限不足", "只有管理员可以查看和管理系统日志")
+        return False
+
     def on_view_log(self):
         """打开日志查看器"""
+        if not self.ensure_admin_log_access():
+            return
         try:
-            log_viewer = LogViewer(config.LOG_FILE)
+            log_viewer = LogViewer(config.LOG_FILE, self)
             log_viewer.exec_()  # 修改这里：由 show() 改为 exec_()
         except Exception as e:
             logger.error(f"打开日志查看器失败: {e}")
@@ -348,6 +357,8 @@ class MainWindow(QMainWindow):
 
     def on_clear_log(self):
         """清空日志文件"""
+        if not self.ensure_admin_log_access():
+            return
         if confirm_danger(self, "确认清空日志", "确定要清空所有日志记录吗？", "清空日志"):
             try:
                 with open(config.LOG_FILE, 'w') as f:
