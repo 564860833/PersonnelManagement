@@ -100,6 +100,31 @@ class DatabasePersonIdTests(unittest.TestCase):
 
         self.assertEqual([], db.get_all_data("family"))
 
+    def test_related_import_skips_rows_without_business_fields(self):
+        db = self.open_db()
+        db.import_excel_data("base_info", [{"sequence": 1, "name": "张三"}])
+        person_id = db.get_all_data("base_info")[0]["id"]
+
+        db.import_excel_data("family", [{"sequence": 1, "name": "张三"}])
+        db.import_excel_data("rewards", [{"person_id": person_id, "reward_name": "   "}])
+        db.import_excel_data("resume", [{"sequence": 1, "name": "张三", "resume_text": "NaN"}])
+
+        self.assertEqual([], db.get_all_data("family"))
+        self.assertEqual([], db.get_all_data("rewards"))
+        self.assertEqual([], db.get_all_data("resume"))
+
+    def test_related_import_keeps_rows_with_business_fields(self):
+        db = self.open_db()
+        db.import_excel_data("base_info", [{"sequence": 1, "name": "张三"}])
+
+        db.import_excel_data("family", [{"sequence": 1, "name": "张三", "relation": "父亲"}])
+        db.import_excel_data("rewards", [{"sequence": 1, "name": "张三", "reward_name": "优秀"}])
+        db.import_excel_data("resume", [{"sequence": 1, "name": "张三", "resume_text": "简历"}])
+
+        self.assertEqual("父亲", db.get_all_data("family")[0]["relation"])
+        self.assertEqual("优秀", db.get_all_data("rewards")[0]["reward_name"])
+        self.assertEqual("简历", db.get_all_data("resume")[0]["resume_text"])
+
     def test_migrates_old_related_tables_to_person_id(self):
         path = self.make_db_path()
         conn = sqlite3.connect(path)

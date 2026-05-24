@@ -12,6 +12,7 @@ logger = logging.getLogger("Database")
 
 
 RELATED_TABLES = ("rewards", "family", "resume")
+RELATED_IMPORT_IDENTITY_COLUMNS = {"id", "person_id", "sequence", "name"}
 
 RELATED_TABLE_COLUMNS = {
     "rewards": [
@@ -402,8 +403,10 @@ class Database:
 
     def _normalize_import_rows(self, table_name: str, data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         valid_columns = set(self.get_table_columns(table_name))
+        related_business_columns = []
         if table_name in RELATED_TABLES:
             valid_columns.update({"sequence", "name"})
+            related_business_columns = self._related_business_columns(table_name)
 
         normalized_data = []
         for row in data:
@@ -420,8 +423,34 @@ class Database:
                             value = month_key
                     normalized_row[normalized_col] = value
             if normalized_row:
+                if (
+                    table_name in RELATED_TABLES
+                    and not self._has_related_business_content(normalized_row, related_business_columns)
+                ):
+                    continue
                 normalized_data.append(normalized_row)
         return normalized_data
+
+    @staticmethod
+    def _is_blank_import_value(value) -> bool:
+        if value is None:
+            return True
+
+        text = str(value).strip()
+        return not text or text.lower() in {"nan", "nat", "none", "<na>"}
+
+    def _related_business_columns(self, table_name: str) -> List[str]:
+        return [
+            column
+            for column in self.get_table_columns(table_name)
+            if column not in RELATED_IMPORT_IDENTITY_COLUMNS
+        ]
+
+    def _has_related_business_content(self, row: Dict[str, Any], business_columns: List[str]) -> bool:
+        return any(
+            column in row and not self._is_blank_import_value(row.get(column))
+            for column in business_columns
+        )
 
     def _sequence_value_for_storage(self, value):
         normalized = self._normalize_sequence(value)
@@ -508,10 +537,14 @@ class Database:
 
     def _insert_related_rows(self, table_name: str, rows: List[Dict[str, Any]]):
         valid_columns = [column for column in self.get_table_columns(table_name) if column != "id"]
+        related_business_columns = self._related_business_columns(table_name)
         insert_rows = []
         unresolved = []
 
         for index, row in enumerate(rows, start=1):
+            if not self._has_related_business_content(row, related_business_columns):
+                continue
+
             try:
                 person_id = self._resolve_person_id(row)
             except ValueError as e:
@@ -797,11 +830,15 @@ class Database:
 
         duplicates = []
         seen_record_keys = set()
+        related_business_columns = self._related_business_columns(table_name)
         for record in records:
             normalized_record = {
                 self.normalize_column_name(column_name): value
                 for column_name, value in record.items()
             }
+            if not self._has_related_business_content(normalized_record, related_business_columns):
+                continue
+
             person_id = None
             try:
                 person_id = self._resolve_person_id(normalized_record)

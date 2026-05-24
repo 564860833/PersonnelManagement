@@ -10,7 +10,7 @@ try:
 except ImportError:
     xlrd = None
 
-from core.database import Database
+from core.database import Database, RELATED_TABLES
 from metadata.constants import TABLE_LABELS
 
 logger = logging.getLogger('ExcelImport')
@@ -243,6 +243,11 @@ def _prepare_import_records_with_metadata(
 
             records.append(record)
 
+        if table_name in RELATED_TABLES:
+            records = db._normalize_import_rows(table_name, records)
+            if not records:
+                return False, f"{TABLE_LABELS[table_name]}中未找到有效明细记录", [], assessment_years
+
         return True, f"成功读取{TABLE_LABELS[table_name]} {len(records)} 条记录", records, assessment_years
 
     except Exception as e:
@@ -319,6 +324,11 @@ def import_prepared_records(
     """将已解析的记录写入数据库，供后台线程调用。"""
     db = Database(db_path)
     try:
+        if table_name in RELATED_TABLES:
+            records = db._normalize_import_rows(table_name, records)
+            if not records:
+                return {"success": False, "message": f"{TABLE_LABELS[table_name]}中未找到有效明细记录"}
+
         if overwrite and table_name != 'base_info' and not db.clear_table_data(table_name):
             return {"success": False, "message": f"清空{TABLE_LABELS[table_name]}失败，请查看日志"}
 
