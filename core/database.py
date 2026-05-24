@@ -6,7 +6,7 @@ import sqlite3
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
-from metadata.constants import COLUMN_LABEL_TO_FIELD, DEFAULT_PERMISSIONS, TABLE_NAMES, validate_table_name
+from metadata.constants import COLUMN_LABEL_TO_FIELD, DEFAULT_PERMISSIONS, TABLE_NAMES, normalize_permissions, validate_table_name
 
 logger = logging.getLogger("Database")
 
@@ -956,6 +956,7 @@ class Database:
 
     def set_user_permissions(self, username: str, permissions: dict):
         try:
+            normalized_permissions = normalize_permissions(permissions)
             cursor = self.conn.cursor()
             cursor.execute(
                 """
@@ -965,10 +966,10 @@ class Database:
                 """,
                 (
                     username,
-                    int(permissions.get("base_info", False)),
-                    int(permissions.get("rewards", False)),
-                    int(permissions.get("family", False)),
-                    int(permissions.get("resume", False)),
+                    int(normalized_permissions.get("base_info", False)),
+                    int(normalized_permissions.get("rewards", False)),
+                    int(normalized_permissions.get("family", False)),
+                    int(normalized_permissions.get("resume", False)),
                 ),
             )
             self.conn.commit()
@@ -982,12 +983,12 @@ class Database:
         cursor.execute("SELECT * FROM user_permissions WHERE username=?", (username,))
         row = cursor.fetchone()
         if row:
-            return {
+            return normalize_permissions({
                 "base_info": bool(row["base_info"]),
                 "rewards": bool(row["rewards"]),
                 "family": bool(row["family"]),
                 "resume": bool(row["resume"]),
-            }
+            })
         return DEFAULT_PERMISSIONS.copy()
 
     def is_admin(self, username: str) -> bool:

@@ -17,6 +17,7 @@ from metadata.constants import (
     get_table_field_items,
     get_table_field_labels,
     get_table_label,
+    normalize_permissions,
 )
 from metadata.query_options import (
     EDUCATION_KEYWORDS,
@@ -44,6 +45,7 @@ logger = logging.getLogger('QueryTab')
 
 def build_ai_analysis_payload(results_dict: dict, permissions: dict, assessment_years=None) -> dict:
     """构建 AI 分析 payload：schema 用于选列，rows 仅供第二阶段分析。"""
+    permissions = normalize_permissions(permissions)
     payload = {
         "schemas": {},
         "tables": {},
@@ -51,7 +53,7 @@ def build_ai_analysis_payload(results_dict: dict, permissions: dict, assessment_
     allowed_tables = [
         table_name
         for table_name in TABLE_LABELS.keys()
-        if (permissions or {}).get(table_name)
+        if permissions.get(table_name)
     ]
 
     for table_name in allowed_tables:
@@ -656,7 +658,7 @@ class QueryTab(QWidget):
         """
         super().__init__()
         self.db = db
-        self.permissions = permissions
+        self.permissions = normalize_permissions(permissions)
         self.ai_dialog = None  # 【新增】初始化 AI 对话框引用
         self.current_results = []  # 保存当前基础信息查询结果
         self.current_results_dict = {}  # 保存完整查询结果

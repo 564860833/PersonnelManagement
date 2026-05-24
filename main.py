@@ -21,7 +21,7 @@ from config import config
 from core.database import Database
 from ui.login import LoginDialog
 from ui.main_window import MainWindow
-from metadata.constants import ADMIN_PERMISSIONS
+from metadata.constants import ADMIN_PERMISSIONS, normalize_permissions
 
 # 全局主窗口引用，防止被垃圾回收
 global_main_window = None
@@ -121,7 +121,9 @@ def main():
         if not check_database_connection(db):
             logger.error("数据库连接失败，应用程序将退出")
             QMessageBox.critical(None, "数据库错误", "无法连接到数据库，应用程序将退出")
-            return app.exec_()
+            db.close()
+            app.quit()
+            return 1
 
         logger.info("数据库初始化成功")
 
@@ -139,11 +141,11 @@ def main():
             logger.info(f"用户 {username} 登录成功")
 
             # 获取用户权限
-            permissions = db.get_user_permissions(username)
+            permissions = normalize_permissions(db.get_user_permissions(username))
 
             # 管理员自动拥有所有权限
             if db.is_admin(username):
-                permissions = ADMIN_PERMISSIONS.copy()
+                permissions = normalize_permissions(ADMIN_PERMISSIONS.copy())
                 logger.info(f"管理员账号 {username} 获得所有权限")
 
             try:
@@ -163,7 +165,9 @@ def main():
             except Exception as e:
                 logger.exception("创建主窗口失败")
                 QMessageBox.critical(None, "启动失败", f"无法启动主窗口: {str(e)}")
-                return app.exec_()
+                db.close()
+                app.quit()
+                return 1
         else:
             # 用户取消登录或登录失败
             logger.info("用户取消登录，应用程序将退出")

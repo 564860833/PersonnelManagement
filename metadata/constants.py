@@ -8,9 +8,22 @@ TABLE_LABELS = {
 }
 
 TABLE_NAMES = tuple(TABLE_LABELS.keys())
+RELATED_PERMISSION_TABLES = ("rewards", "family", "resume")
 
 DEFAULT_PERMISSIONS = {table_name: False for table_name in TABLE_NAMES}
 ADMIN_PERMISSIONS = {table_name: True for table_name in TABLE_NAMES}
+
+
+def normalize_permissions(permissions=None) -> dict:
+    """Return a complete permission dict with related tables depending on base_info."""
+    normalized = DEFAULT_PERMISSIONS.copy()
+    for table_name in TABLE_NAMES:
+        normalized[table_name] = bool((permissions or {}).get(table_name, False))
+
+    if any(normalized[table_name] for table_name in RELATED_PERMISSION_TABLES):
+        normalized["base_info"] = True
+
+    return normalized
 
 TABLE_FIELD_LABELS = {
     "base_info": [

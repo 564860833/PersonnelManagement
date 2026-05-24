@@ -5,7 +5,7 @@ from PyQt5.QtWidgets import (QDialog, QLabel, QLineEdit, QPushButton, QVBoxLayou
 from PyQt5.QtCore import QLineF, QRect, QRectF, QSize, Qt
 from PyQt5.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 import logging
-from metadata.constants import TABLE_LABELS
+from metadata.constants import RELATED_PERMISSION_TABLES, TABLE_LABELS, normalize_permissions
 from ui.confirm_dialog import confirm_danger
 from ui.styles import DIALOG_BASE_STYLE, DIALOG_BUTTON_STYLE, RESULT_TABLE_STYLE
 
@@ -41,6 +41,34 @@ def _permission_item(enabled: bool) -> QTableWidgetItem:
     item.setToolTip("有权限" if enabled else "无权限")
     item.setTextAlignment(Qt.AlignCenter)
     return item
+
+
+def _collect_normalized_permissions(permission_checks: dict) -> dict:
+    return normalize_permissions(
+        {table_name: check.isChecked() for table_name, check in permission_checks.items()}
+    )
+
+
+def _sync_permission_dependency(permission_checks: dict, table_name: str, checked: bool):
+    if table_name == "base_info":
+        if not checked:
+            for related_table in RELATED_PERMISSION_TABLES:
+                permission_checks[related_table].setChecked(False)
+        return
+
+    if table_name in RELATED_PERMISSION_TABLES and checked:
+        permission_checks["base_info"].setChecked(True)
+
+
+def _bind_permission_dependencies(permission_checks: dict):
+    for table_name, check in permission_checks.items():
+        check.toggled.connect(
+            lambda checked, current_table=table_name: _sync_permission_dependency(
+                permission_checks,
+                current_table,
+                checked,
+            )
+        )
 
 
 class CenteredIconDelegate(QStyledItemDelegate):
@@ -127,6 +155,7 @@ class AddUserDialog(QDialog):
             check = QCheckBox(f"{label}表")
             self.permission_checks[table_name] = check
             permissions_layout.addWidget(check)
+        _bind_permission_dependencies(self.permission_checks)
         permissions_group.setLayout(permissions_layout)
         layout.addWidget(permissions_group)
 
@@ -178,10 +207,7 @@ class AddUserDialog(QDialog):
                 return
 
             # 设置权限
-            permissions = {
-                table_name: int(check.isChecked())
-                for table_name, check in self.permission_checks.items()
-            }
+            permissions = _collect_normalized_permissions(self.permission_checks)
             self.db.set_user_permissions(username, permissions)
 
             QMessageBox.information(self, "成功", f"用户 {username} 添加成功")
@@ -268,7 +294,7 @@ class UserManagementDialog(QDialog):
 
             for row, username in enumerate(users):
                 # 获取用户权限
-                permissions = self.db.get_user_permissions(username)
+                permissions = normalize_permissions(self.db.get_user_permissions(username))
 
                 # 填充表格
                 self.user_table.setItem(row, 0, QTableWidgetItem(username))
@@ -331,7 +357,7 @@ class EditPermissionsDialog(QDialog):
         super().__init__()
         self.db = db
         self.username = username
-        self.permissions = permissions
+        self.permissions = normalize_permissions(permissions)
         self.setWindowTitle(f"编辑权限 - {username}")
         self.setMinimumSize(420, 420)
         self.setup_ui()
@@ -352,6 +378,7 @@ class EditPermissionsDialog(QDialog):
             check.setChecked(self.permissions[table_name])
             self.permission_checks[table_name] = check
             permissions_layout.addWidget(check)
+        _bind_permission_dependencies(self.permission_checks)
         permissions_group.setLayout(permissions_layout)
         layout.addWidget(permissions_group)
 
@@ -374,10 +401,7 @@ class EditPermissionsDialog(QDialog):
 
     def save_permissions(self):
         """保存权限设置"""
-        permissions = {
-            table_name: check.isChecked()
-            for table_name, check in self.permission_checks.items()
-        }
+        permissions = _collect_normalized_permissions(self.permission_checks)
 
         try:
             self.db.set_user_permissions(self.username, permissions)

@@ -16,7 +16,7 @@ from ui.log_viewer import LogViewer
 from ui.styles import NO_PERMISSION_LABEL_STYLE
 from ui.toast import show_toast
 from ui.worker import Worker, WorkerResultHandler
-from metadata.constants import ADMIN_PERMISSIONS, DEFAULT_PERMISSIONS, TABLE_LABELS
+from metadata.constants import ADMIN_PERMISSIONS, DEFAULT_PERMISSIONS, TABLE_LABELS, normalize_permissions
 
 logger = logging.getLogger('MainWindow')
 
@@ -33,7 +33,7 @@ class MainWindow(QMainWindow):
         self._background_tasks = []
 
         # 确保权限字典不为空
-        self.permissions = permissions or DEFAULT_PERMISSIONS.copy()
+        self.permissions = normalize_permissions(permissions or DEFAULT_PERMISSIONS.copy())
 
         # 添加 is_admin 属性
         self.is_admin = self.db.is_admin(username)
@@ -41,7 +41,7 @@ class MainWindow(QMainWindow):
 
         # 管理员自动拥有所有权限
         if self.is_admin:
-            self.permissions = ADMIN_PERMISSIONS.copy()
+            self.permissions = normalize_permissions(ADMIN_PERMISSIONS.copy())
             logger.info(f"管理员账号 {username} 获得所有权限")
 
         self.init_ui()

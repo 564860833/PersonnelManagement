@@ -55,6 +55,37 @@ class DatabaseUserSecurityTests(unittest.TestCase):
         self.assertTrue(db.change_password("Admin", "new"))
         self.assertEqual("new", db.get_password("Admin"))
 
+    def test_related_permissions_are_saved_and_read_with_base_info(self):
+        db = self.open_db()
+        self.assertTrue(db.add_user("analyst", "pw"))
+
+        db.set_user_permissions(
+            "analyst",
+            {
+                "base_info": False,
+                "rewards": False,
+                "family": True,
+                "resume": False,
+            },
+        )
+
+        self.assertEqual(
+            {
+                "base_info": True,
+                "rewards": False,
+                "family": True,
+                "resume": False,
+            },
+            db.get_user_permissions("analyst"),
+        )
+
+        row = db.conn.execute(
+            "SELECT base_info, family FROM user_permissions WHERE username=?",
+            ("analyst",),
+        ).fetchone()
+        self.assertEqual(1, row["base_info"])
+        self.assertEqual(1, row["family"])
+
 
 if __name__ == "__main__":
     unittest.main()

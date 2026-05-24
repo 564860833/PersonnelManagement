@@ -7,7 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt5.QtWidgets import QApplication, QHeaderView
 
 from metadata.constants import TABLE_LABELS
-from ui.user_management import AddUserDialog, CenteredIconDelegate, UserManagementDialog
+from ui.user_management import AddUserDialog, CenteredIconDelegate, EditPermissionsDialog, UserManagementDialog
 
 
 class FakeUserDb:
@@ -19,6 +19,15 @@ class FakeUserDb:
 
     def get_all_users(self):
         return ["analyst"]
+
+
+class FakeEditUserDb(FakeUserDb):
+    def __init__(self, permissions):
+        super().__init__(permissions)
+        self.set_permission_calls = []
+
+    def set_user_permissions(self, username, permissions):
+        self.set_permission_calls.append((username, permissions))
 
 
 class FakeAddUserDb:
@@ -83,6 +92,17 @@ class AddUserDialogTests(unittest.TestCase):
         self.assertEqual([("analyst", "pw")], db.add_user_calls)
         self.assertEqual([], db.set_permission_calls)
 
+    def test_related_permission_checkbox_forces_base_info(self):
+        db = FakeAddUserDb()
+        dialog = self.make_dialog(db)
+
+        dialog.permission_checks["family"].setChecked(True)
+        self.assertTrue(dialog.permission_checks["base_info"].isChecked())
+
+        dialog.permission_checks["base_info"].setChecked(False)
+        self.assertFalse(dialog.permission_checks["base_info"].isChecked())
+        self.assertFalse(dialog.permission_checks["family"].isChecked())
+
 
 class UserManagementDialogTests(unittest.TestCase):
     @classmethod
@@ -119,6 +139,27 @@ class UserManagementDialogTests(unittest.TestCase):
         self.assertFalse(denied_item.icon().isNull())
         self.assertEqual("无权限", denied_item.toolTip())
 
+    def test_permission_cells_normalize_related_permissions(self):
+        dialog = UserManagementDialog(
+            FakeUserDb(
+                {
+                    "analyst": {
+                        "base_info": False,
+                        "rewards": False,
+                        "family": True,
+                        "resume": False,
+                    }
+                }
+            )
+        )
+        self.addCleanup(dialog.deleteLater)
+
+        base_info_item = dialog.user_table.item(0, self.permission_col("base_info"))
+        family_item = dialog.user_table.item(0, self.permission_col("family"))
+
+        self.assertEqual("有权限", base_info_item.toolTip())
+        self.assertEqual("有权限", family_item.toolTip())
+
     def test_permission_columns_use_centered_icon_delegate(self):
         dialog = self.make_dialog()
 
@@ -136,6 +177,49 @@ class UserManagementDialogTests(unittest.TestCase):
         self.assertEqual(QHeaderView.Interactive, dialog.user_table.horizontalHeader().sectionResizeMode(family_col))
         self.assertGreater(dialog.user_table.columnWidth(family_col), dialog.user_table.columnWidth(rewards_col))
         self.assertGreaterEqual(dialog.user_table.columnWidth(family_col), 210)
+
+    def test_edit_permissions_dialog_normalizes_initial_and_saved_permissions(self):
+        db = FakeEditUserDb(
+            {
+                "analyst": {
+                    "base_info": False,
+                    "rewards": True,
+                    "family": False,
+                    "resume": False,
+                }
+            }
+        )
+        dialog = EditPermissionsDialog(
+            db,
+            "analyst",
+            {
+                "base_info": False,
+                "rewards": True,
+                "family": False,
+                "resume": False,
+            },
+        )
+        self.addCleanup(dialog.deleteLater)
+
+        self.assertTrue(dialog.permission_checks["base_info"].isChecked())
+        self.assertTrue(dialog.permission_checks["rewards"].isChecked())
+
+        dialog.save_permissions()
+
+        self.assertEqual(
+            [
+                (
+                    "analyst",
+                    {
+                        "base_info": True,
+                        "rewards": True,
+                        "family": False,
+                        "resume": False,
+                    },
+                )
+            ],
+            db.set_permission_calls,
+        )
 
 
 if __name__ == "__main__":
