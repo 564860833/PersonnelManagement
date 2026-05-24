@@ -20,11 +20,20 @@ class MainWindowProgressDialogTests(unittest.TestCase):
         window.last_export_dir = ""
         window.last_import_dir = ""
         window.permissions = {"base_info": True}
-        window.query_tab = type(
-            "QueryTabStub",
-            (),
-            {"current_results_dict": {"base_info": [{"sequence": 1, "name": "张三"}]}},
-        )()
+
+        class DbStub:
+            def search_personnel(self, **kwargs):
+                table_name = kwargs.get("table_name", "base_info")
+                return {table_name: [{"sequence": 1, "name": "张三"}], "total_count": 1}
+
+        class QueryTabStub:
+            current_results_dict = {"base_info": [{"sequence": 1, "name": "张三"}]}
+
+            def get_last_query_conditions(self):
+                return {}
+
+        window.db = DbStub()
+        window.query_tab = QueryTabStub()
         window.clear_query_cache = lambda: None
         return window
 
@@ -110,6 +119,54 @@ class MainWindowProgressDialogTests(unittest.TestCase):
         dialog = self.make_dialog_from_factory(factory, title)
         self.assertEqual("正在导出数据", dialog.windowTitle())
         self.assertEqual("export", dialog.icon_kind)
+
+    def test_export_data_reads_full_rows_from_database_connection(self):
+        window = self.make_window_stub()
+        calls = {}
+
+        def run_background_task(title, task_fn, on_success=None, on_error=None, progress_dialog_factory=None):
+            calls["title"] = title
+            calls["task_fn"] = task_fn
+            calls["on_success"] = on_success
+            calls["progress_dialog_factory"] = progress_dialog_factory
+
+        window.run_background_task = run_background_task
+
+        class FakeExportDb:
+            def __init__(self):
+                self.closed = False
+
+            def search_personnel(self, **kwargs):
+                return {
+                    "base_info": [
+                        {"sequence": 1, "name": "张三"},
+                        {"sequence": 2, "name": "李四"},
+                    ],
+                    "total_count": 2,
+                }
+
+            def close(self):
+                self.closed = True
+
+        fake_db = FakeExportDb()
+
+        with (
+            patch("ui.main_window.QFileDialog.getSaveFileName", return_value=("D:/tmp/base_info.xlsx", "")),
+            patch("ui.main_window.Database", return_value=fake_db),
+            patch("ui.main_window.export_table_data", return_value=2) as export_mock,
+        ):
+            MainWindow.export_data(window, "base_info")
+            exported_count = calls["task_fn"]()
+
+        self.assertEqual("正在导出数据", calls["title"])
+        self.assertTrue(calls["progress_dialog_factory"] is not None)
+        export_mock.assert_called_once_with(
+            [{"sequence": 1, "name": "张三"}, {"sequence": 2, "name": "李四"}],
+            "D:/tmp/base_info.xlsx",
+            "base_info",
+        )
+        self.assertEqual(2, exported_count)
+        self.assertTrue(fake_db.closed)
 
     def test_import_data_preview_uses_modern_import_progress_dialog(self):
         window = self.make_window_stub()

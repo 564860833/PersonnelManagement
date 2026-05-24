@@ -27,6 +27,22 @@ class ExcelImportRelatedRowsTests(unittest.TestCase):
         pd.DataFrame(rows, columns=columns).to_excel(file_path, index=False)
         return file_path
 
+    def test_preview_rejects_invalid_base_info_date(self):
+        db_path = self.make_temp_path(".db")
+        db = Database(db_path)
+        db.close()
+        excel_path = self.write_excel(
+            [{"sequence": 1, "name": "A", "birth_date": "not-a-date"}],
+            ["sequence", "name", "birth_date"],
+        )
+
+        result = prepare_import_preview(excel_path, db_path, "base_info")
+
+        self.assertFalse(result["success"])
+        self.assertIn("出生年月", result["message"])
+        self.assertNotIn("birth_date", result["message"])
+        self.assertIn("格式无效", result["message"])
+
     def test_preview_rejects_duplicate_base_info_rows(self):
         db_path = self.make_temp_path(".db")
         db = Database(db_path)

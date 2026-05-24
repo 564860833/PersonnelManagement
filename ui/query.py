@@ -12,6 +12,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QSignalBlocker, pyqtSignal
 from PyQt5.QtGui import QColor, QFont
 from core.database import Database
+from config import config
 from metadata.constants import (
     TABLE_LABELS,
     get_table_field_items,
@@ -661,7 +662,9 @@ class QueryTab(QWidget):
         self.permissions = normalize_permissions(permissions)
         self.ai_dialog = None  # 【新增】初始化 AI 对话框引用
         self.current_results = []  # 保存当前基础信息查询结果
-        self.current_results_dict = {}  # 保存完整查询结果
+        self.current_results_dict = {}  # 保存当前页查询结果
+        self.current_total_counts = {}
+        self._last_query_conditions = None
         self.current_table_name = 'base_info'
         self._query_state = {}
         self._restoring_query_state = False
@@ -1062,18 +1065,118 @@ class QueryTab(QWidget):
             "parttime_education": parttime_keywords,
         }
 
-    def refresh_query_results(self, results_dict):
-        """刷新当前查询结果和表格显示。"""
-        self.current_results_dict = results_dict
-        self.current_results = results_dict.get('base_info', [])
-        self.current_table_name = 'base_info'
-        self.current_page = 1
+    def get_last_query_conditions(self):
+        """返回最后一次成功查询的条件；None 表示尚未查询。"""
+        if self._last_query_conditions is None:
+            return None
+        return dict(self._last_query_conditions)
+
+    def _snapshot_query_conditions(self, query_conditions=None):
+        if query_conditions is None:
+            query_conditions = self.get_last_query_conditions()
+        if query_conditions is None:
+            return None
+        return dict(query_conditions)
+
+    def get_table_total_count(self, table_name: str, query_conditions=None) -> int:
+        """按最后一次查询条件获取指定表的总行数。"""
+        conditions = self._snapshot_query_conditions(query_conditions)
+        if conditions is None:
+            return 0
+
+        db = Database(config.DB_PATH)
+        try:
+            results_dict = db.search_personnel(
+                table_name=table_name,
+                limit=1,
+                offset=0,
+                **conditions,
+            )
+            return int(results_dict.get("total_count", 0))
+        finally:
+            db.close()
+
+    def get_full_table_rows(self, table_name: str, query_conditions=None):
+        """按最后一次查询条件获取指定表的全量匹配记录。"""
+        conditions = self._snapshot_query_conditions(query_conditions)
+        if conditions is None:
+            return []
+
+        db = Database(config.DB_PATH)
+        try:
+            results_dict = db.search_personnel(
+                table_name=table_name,
+                **conditions,
+            )
+            return [dict(row) for row in results_dict.get(table_name, [])]
+        finally:
+            db.close()
+
+    def refresh_query_results(
+        self,
+        results_dict,
+        table_name: str = "base_info",
+        page: int = 1,
+        query_conditions=None,
+    ):
+        """刷新当前页查询结果和表格显示。"""
+        rows = [dict(row) for row in (results_dict or {}).get(table_name, [])]
+        total_count = int((results_dict or {}).get("total_count", len(rows)))
+
+        self.current_results_dict = {table_name: rows}
+        self.current_total_counts[table_name] = total_count
+        self.current_table_name = table_name
+        self.current_page = 1 if total_count <= 0 else max(1, page)
+        if table_name == 'base_info':
+            self.current_results = rows
+        if query_conditions is not None:
+            self._last_query_conditions = dict(query_conditions)
+
         self.display_current_page()
-        self.update_table_buttons(len(self.current_results) > 0)
+        self.update_table_buttons(self.current_total_counts.get('base_info', 0) > 0)
+
+    def load_table_page(self, table_name: str, page: int = 1, query_conditions=None):
+        """从数据库加载指定表的指定页。"""
+        conditions = query_conditions
+        if conditions is None:
+            conditions = self.get_last_query_conditions()
+        if conditions is None:
+            return False
+
+        target_page = max(1, page)
+        offset = (target_page - 1) * self.page_size
+        results_dict = self.db.search_personnel(
+            table_name=table_name,
+            limit=self.page_size,
+            offset=offset,
+            **conditions,
+        )
+
+        total_count = int(results_dict.get("total_count", 0))
+        total_pages = self.get_total_pages(total_count)
+        if total_pages and target_page > total_pages:
+            target_page = total_pages
+            offset = (target_page - 1) * self.page_size
+            results_dict = self.db.search_personnel(
+                table_name=table_name,
+                limit=self.page_size,
+                offset=offset,
+                **conditions,
+            )
+
+        self.refresh_query_results(
+            results_dict,
+            table_name=table_name,
+            page=target_page,
+            query_conditions=conditions,
+        )
+        return True
 
     def clear_results(self):
         """清空当前查询缓存和结果表格。"""
         self.current_results_dict = {}
+        self.current_total_counts = {}
+        self._last_query_conditions = None
         self.current_results = []
         self.current_table_name = 'base_info'
         self.current_page = 1
@@ -1095,11 +1198,14 @@ class QueryTab(QWidget):
     def view_all_data(self):
         """查看全部数据"""
         try:
-            # 直接查询所有数据，不使用任何条件
-            results_dict = self.db.search_personnel()
-            self.refresh_query_results(results_dict)
+            query_conditions = {}
+            self.current_total_counts = {}
+            self.current_results_dict = {}
+            self.current_results = []
+            self.load_table_page('base_info', 1, query_conditions=query_conditions)
 
-            self.show_status_message(f"查看全部完成：共找到 {len(self.current_results)} 条基础信息记录")
+            total_count = self.current_total_counts.get('base_info', 0)
+            self.show_status_message(f"查看全部完成：共找到 {total_count} 条基础信息记录")
         except Exception as e:
             logger.error(f"查看全部数据失败: {e}")
             QMessageBox.critical(self, "查询错误", f"查看全部数据时发生错误: {e}")
@@ -1107,45 +1213,101 @@ class QueryTab(QWidget):
     def execute_query(self):
         """执行数据库查询操作"""
         try:
-            results_dict = self.db.search_personnel(**self.collect_query_conditions())
-            self.refresh_query_results(results_dict)
+            query_conditions = self.collect_query_conditions()
+            self.current_total_counts = {}
+            self.current_results_dict = {}
+            self.current_results = []
+            self.load_table_page('base_info', 1, query_conditions=query_conditions)
 
-            self.show_status_message(f"查询完成：找到 {len(self.current_results)} 条基础信息记录")
+            total_count = self.current_total_counts.get('base_info', 0)
+            self.show_status_message(f"查询完成：找到 {total_count} 条基础信息记录")
 
         except Exception as e:
             logger.error(f"查询执行失败: {e}")
             QMessageBox.critical(self, "查询错误", f"执行查询时发生错误: {e}")
+
+    def build_full_ai_analysis_payload(self, query_conditions=None):
+        """按最后一次查询条件全量读取 AI 分析数据。"""
+        query_conditions = self._snapshot_query_conditions(query_conditions)
+        if query_conditions is None:
+            return build_ai_analysis_payload({}, self.permissions, [])
+
+        db = Database(config.DB_PATH)
+        try:
+            assessment_years = db.get_assessment_years() or []
+            full_results = {}
+            for table_name in TABLE_LABELS.keys():
+                if not self.permissions.get(table_name, False):
+                    continue
+                table_results = db.search_personnel(table_name=table_name, **query_conditions)
+                full_results[table_name] = table_results.get(table_name, [])
+            return build_ai_analysis_payload(full_results, self.permissions, assessment_years)
+        finally:
+            db.close()
+
+    def handle_ai_analysis_payload(self, analysis_payload):
+        """检查 AI 数据并沿用原有 Ollama 打开流程。"""
+        if not analysis_payload["schemas"]:
+            QMessageBox.warning(self, "提示", "当前用户没有可用于 AI 分析的数据表权限。")
+            return
+
+        if not has_analysis_rows(analysis_payload):
+            QMessageBox.warning(self, "提示", "请先查询或查看全部后再使用 AI 分析。")
+            return
+
+        try:
+            status = ensure_ollama_ready(start_if_needed=False)
+            if status.service_available:
+                self.open_ai_dialog(analysis_payload)
+            else:
+                self.start_ollama_then_open_ai(analysis_payload)
+
+        except Exception as e:
+            logger.exception("AI Dialog Error")
+            QMessageBox.critical(self, "组件错误", f"无法打开 AI 窗口：\n{e}")
 
     def open_ai_chat(self):
         """
         启动 AI 分析对话框。
         """
         try:
-            assessment_years = self.db.get_assessment_years() or []
-            analysis_payload = build_ai_analysis_payload(
-                self.current_results_dict,
-                self.permissions,
-                assessment_years,
-            )
-
-            if not analysis_payload["schemas"]:
-                QMessageBox.warning(self, "提示", "当前用户没有可用于 AI 分析的数据表权限。")
-                return
-
-            if not has_analysis_rows(analysis_payload):
+            query_conditions = self.get_last_query_conditions()
+            if query_conditions is None:
                 QMessageBox.warning(self, "提示", "请先查询或查看全部后再使用 AI 分析。")
                 return
 
-            try:
-                status = ensure_ollama_ready(start_if_needed=False)
-                if status.service_available:
-                    self.open_ai_dialog(analysis_payload)
-                else:
-                    self.start_ollama_then_open_ai(analysis_payload)
+            main_window = self.window()
 
-            except Exception as e:
-                logger.exception("AI Dialog Error")
-                QMessageBox.critical(self, "组件错误", f"无法打开 AI 窗口：\n{e}")
+            def task():
+                return self.build_full_ai_analysis_payload(query_conditions)
+
+            def on_success(analysis_payload):
+                self.handle_ai_analysis_payload(analysis_payload)
+
+            def on_error(message):
+                QMessageBox.critical(self, "AI 分析准备失败", message)
+
+            if hasattr(main_window, "run_background_task"):
+                from ui.loading_dialog import ModernLoadingDialog
+
+                def progress_dialog_factory(parent, _title):
+                    return ModernLoadingDialog(
+                        parent,
+                        title="正在准备 AI 分析数据",
+                        message="正在读取当前条件下的全部可分析数据，请稍候...",
+                        icon_kind="ai",
+                    )
+
+                main_window.run_background_task(
+                    "正在准备 AI 分析数据，请稍候...",
+                    task,
+                    on_success=on_success,
+                    on_error=on_error,
+                    progress_dialog_factory=progress_dialog_factory,
+                )
+                return
+
+            on_success(task())
 
         except Exception as e:
             logger.exception("AI Logic Error")
@@ -1219,9 +1381,11 @@ class QueryTab(QWidget):
             QMessageBox.warning(self, "权限不足", "您没有查看此表格的权限")
             return
 
-        self.current_table_name = table_name
-        self.current_page = 1
-        self.display_current_page()
+        try:
+            self.load_table_page(table_name, 1)
+        except Exception as e:
+            logger.error(f"加载{table_name}分页数据失败: {e}")
+            QMessageBox.critical(self, "查询错误", f"加载数据时发生错误: {e}")
 
     def get_table_columns(self, table_name: str):
         """获取当前表的字段和表头。"""
@@ -1253,7 +1417,7 @@ class QueryTab(QWidget):
     def display_current_page(self):
         """显示当前表当前页数据。"""
         data = self.current_results_dict.get(self.current_table_name, [])
-        total_rows = len(data)
+        total_rows = self.current_total_counts.get(self.current_table_name, len(data))
         total_pages = self.get_total_pages(total_rows)
 
         if total_rows == 0:
@@ -1266,10 +1430,9 @@ class QueryTab(QWidget):
 
         self.current_page = max(1, min(self.current_page, total_pages))
         start_index = (self.current_page - 1) * self.page_size
-        end_index = start_index + self.page_size
         fields, headers = self.get_table_columns(self.current_table_name)
         self.result_model.set_data(
-            data[start_index:end_index],
+            data,
             self.current_table_name,
             fields,
             headers,
@@ -1354,12 +1517,18 @@ class QueryTab(QWidget):
         self.go_to_page(self.current_page + 1)
 
     def go_to_page(self, page: int):
-        total_rows = len(self.current_results_dict.get(self.current_table_name, []))
+        total_rows = self.current_total_counts.get(
+            self.current_table_name,
+            len(self.current_results_dict.get(self.current_table_name, [])),
+        )
         total_pages = self.get_total_pages(total_rows)
         if total_pages == 0:
             return
         target_page = max(1, min(page, total_pages))
         if target_page == self.current_page:
             return
-        self.current_page = target_page
-        self.display_current_page()
+        try:
+            self.load_table_page(self.current_table_name, target_page)
+        except Exception as e:
+            logger.error(f"加载第 {target_page} 页失败: {e}")
+            QMessageBox.critical(self, "查询错误", f"加载第 {target_page} 页时发生错误: {e}")

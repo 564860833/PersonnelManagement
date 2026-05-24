@@ -4,7 +4,7 @@ import logging
 
 import pandas as pd
 
-from metadata.constants import TABLE_LABELS, validate_table_name
+from metadata.constants import TABLE_DATE_FIELDS, TABLE_LABELS, validate_table_name
 
 logger = logging.getLogger("ExcelExport")
 
@@ -16,7 +16,18 @@ def export_table_data(data, file_path: str, table_name: str) -> int:
         raise ValueError("没有可导出的数据")
 
     df = pd.DataFrame(data)
-    internal_columns = [column for column in ("id", "person_id") if column in df.columns]
+    for field_name in TABLE_DATE_FIELDS.get(table_name, []):
+        display_column = f"{field_name}_display"
+        if field_name in df.columns and display_column in df.columns:
+            display_values = df[display_column]
+            has_display_value = display_values.notna() & (display_values.astype(str) != "")
+            df.loc[has_display_value, field_name] = display_values[has_display_value]
+
+    internal_columns = [
+        column
+        for column in df.columns
+        if column in {"id", "person_id"} or column.endswith("_display")
+    ]
     if internal_columns:
         df = df.drop(columns=internal_columns)
 

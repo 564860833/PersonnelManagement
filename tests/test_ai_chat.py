@@ -1007,9 +1007,10 @@ class AIChatDirectModelTests(unittest.TestCase):
     def make_query_tab_stub(self):
         tab = QueryTab.__new__(QueryTab)
         tab.db = FakeDb()
-        tab.current_results_dict = {"base_info": [{"sequence": 1, "name": "张三"}]}
         tab.permissions = {"base_info": True, "rewards": False, "family": False, "resume": False}
         tab.ai_dialog = None
+        tab._last_query_conditions = {}
+        tab.window = lambda: object()
         return tab
 
     def test_open_ai_chat_opens_dialog_without_progress_when_ollama_ready(self):
@@ -1017,9 +1018,11 @@ class AIChatDirectModelTests(unittest.TestCase):
 
         with patch.object(QueryTab, "open_ai_dialog") as open_dialog, \
                 patch.object(QueryTab, "start_ollama_then_open_ai") as start_then_open, \
+                patch.object(QueryTab, "build_full_ai_analysis_payload", return_value=payload()) as build_payload, \
                 patch("ui.query.ensure_ollama_ready", return_value=FakeOllamaStatus(True)) as ensure_ready:
             QueryTab.open_ai_chat(tab)
 
+        build_payload.assert_called_once_with({})
         ensure_ready.assert_called_once_with(start_if_needed=False)
         open_dialog.assert_called_once()
         start_then_open.assert_not_called()
@@ -1029,15 +1032,46 @@ class AIChatDirectModelTests(unittest.TestCase):
 
         with patch.object(QueryTab, "open_ai_dialog") as open_dialog, \
                 patch.object(QueryTab, "start_ollama_then_open_ai") as start_then_open, \
+                patch.object(QueryTab, "build_full_ai_analysis_payload", return_value=payload()) as build_payload, \
                 patch("ui.query.ensure_ollama_ready", return_value=FakeOllamaStatus(False)):
             QueryTab.open_ai_chat(tab)
 
+        build_payload.assert_called_once_with({})
         open_dialog.assert_not_called()
         start_then_open.assert_called_once()
 
+    def test_open_ai_chat_uses_background_task_for_full_payload(self):
+        tab = self.make_query_tab_stub()
+        calls = {}
+
+        class FakeMainWindow:
+            def run_background_task(
+                self,
+                title,
+                task_fn,
+                on_success=None,
+                on_error=None,
+                progress_dialog_factory=None,
+            ):
+                calls["title"] = title
+                calls["progress_dialog_factory"] = progress_dialog_factory
+                calls["result"] = task_fn()
+                on_success(calls["result"])
+
+        tab.window = lambda: FakeMainWindow()
+
+        with patch.object(QueryTab, "handle_ai_analysis_payload") as handle_payload, \
+                patch.object(QueryTab, "build_full_ai_analysis_payload", return_value=payload()) as build_payload:
+            QueryTab.open_ai_chat(tab)
+
+        self.assertEqual("正在准备 AI 分析数据，请稍候...", calls["title"])
+        self.assertTrue(callable(calls["progress_dialog_factory"]))
+        build_payload.assert_called_once_with({})
+        handle_payload.assert_called_once_with(payload())
+
     def test_open_ai_chat_requires_query_rows_before_ollama_check(self):
         tab = self.make_query_tab_stub()
-        tab.current_results_dict = {}
+        tab._last_query_conditions = None
 
         with patch.object(QueryTab, "open_ai_dialog") as open_dialog, \
                 patch.object(QueryTab, "start_ollama_then_open_ai") as start_then_open, \
@@ -1049,6 +1083,46 @@ class AIChatDirectModelTests(unittest.TestCase):
         open_dialog.assert_not_called()
         start_then_open.assert_not_called()
         warning.assert_called_once()
+
+    def test_query_tab_page_navigation_requeries_current_table(self):
+        class FakePagedDb:
+            def __init__(self):
+                self.calls = []
+
+            def search_personnel(self, **kwargs):
+                self.calls.append(kwargs)
+                table_name = kwargs["table_name"]
+                return {
+                    table_name: [{"marker": kwargs["offset"]}],
+                    "total_count": 120,
+                }
+
+        db = FakePagedDb()
+        tab = QueryTab.__new__(QueryTab)
+        tab.db = db
+        tab.page_size = 50
+        tab.current_table_name = "family"
+        tab.current_page = 1
+        tab.current_results_dict = {"family": [{"marker": 0}]}
+        tab.current_total_counts = {"base_info": 1, "family": 120}
+        tab.current_results = []
+        tab._last_query_conditions = {"name": "P1"}
+        tab.display_current_page = lambda: None
+        tab.update_table_buttons = lambda has_results: None
+
+        QueryTab.go_to_page(tab, 3)
+
+        self.assertEqual(3, tab.current_page)
+        self.assertEqual({"marker": 100}, tab.current_results_dict["family"][0])
+        self.assertEqual(
+            {
+                "table_name": "family",
+                "limit": 50,
+                "offset": 100,
+                "name": "P1",
+            },
+            db.calls[0],
+        )
 
     def test_start_ollama_then_open_ai_uses_main_window_progress(self):
         tab = self.make_query_tab_stub()

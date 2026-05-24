@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import QApplication, QFrame
 from PyQt5.QtCore import Qt
 
 from ui.query import MonthRangeDialog, MonthRangePicker
+from ui.table_model import ResultTableModel
 
 
 class MonthRangeDialogTests(unittest.TestCase):
@@ -103,6 +104,25 @@ class MonthRangeDialogTests(unittest.TestCase):
         picker.clear()
         self.assertEqual((None, None), picker.get_range())
         self.assertEqual("", picker.text())
+
+    def test_result_table_model_prefers_date_display_value(self):
+        model = ResultTableModel()
+
+        model.set_data(
+            [{"birth_date": "1990-01", "birth_date_display": "1990.1"}],
+            "base_info",
+            ["birth_date"],
+            ["birth_date"],
+        )
+        self.assertEqual("1990.1", model.data(model.index(0, 0), Qt.DisplayRole))
+
+        model.set_data(
+            [{"birth_date": "1990-01"}],
+            "base_info",
+            ["birth_date"],
+            ["birth_date"],
+        )
+        self.assertEqual("1990-01", model.data(model.index(0, 0), Qt.DisplayRole))
 
 
 if __name__ == "__main__":

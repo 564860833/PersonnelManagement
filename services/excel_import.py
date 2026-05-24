@@ -243,8 +243,9 @@ def _prepare_import_records_with_metadata(
 
             records.append(record)
 
+        records = db._normalize_import_rows(table_name, records)
+
         if table_name in RELATED_TABLES:
-            records = db._normalize_import_rows(table_name, records)
             if not records:
                 return False, f"{TABLE_LABELS[table_name]}中未找到有效明细记录", [], assessment_years
 
@@ -335,6 +336,9 @@ def import_prepared_records(
     db = Database(db_path)
     try:
         skipped_duplicate_related_rows = 0
+        if table_name not in RELATED_TABLES:
+            records = db._normalize_import_rows(table_name, records)
+
         if table_name in RELATED_TABLES:
             records = db._normalize_import_rows(table_name, records)
             if not records:

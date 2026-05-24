@@ -6,6 +6,7 @@ from PyQt5.QtWidgets import (
     QMainWindow, QTabWidget, QAction, QFileDialog,
     QMessageBox, QStatusBar, QDialog, QLabel, QProgressDialog
 )
+from core.database import Database
 from services.excel_export import export_table_data
 from services.excel_import import import_prepared_records, prepare_import_preview
 from config import config
@@ -250,10 +251,21 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "导出失败", "请先执行查询操作")
                 return
 
-            # 从查询标签页获取结果数据
-            data = self.query_tab.current_results_dict.get(table_name, [])
+            query_conditions_getter = getattr(self.query_tab, "get_last_query_conditions", None)
+            query_conditions = query_conditions_getter() if callable(query_conditions_getter) else None
+            if query_conditions is None:
+                self.set_status("导出失败：请先执行查询操作")
+                QMessageBox.warning(self, "导出失败", "请先执行查询操作")
+                return
 
-            if not data:
+            count_result = self.db.search_personnel(
+                table_name=table_name,
+                limit=1,
+                offset=0,
+                **query_conditions,
+            )
+            total_count = int(count_result.get("total_count", 0))
+            if total_count <= 0:
                 self.set_status(f"导出失败：{TABLE_LABELS.get(table_name, table_name)}没有可导出的数据")
                 QMessageBox.warning(self, "导出失败", "没有可导出的数据")
                 return
@@ -277,10 +289,19 @@ class MainWindow(QMainWindow):
                 return  # 用户取消了保存
             self.last_export_dir = self.get_selected_dir(file_path)
 
-            export_data = [dict(row) for row in data]
+            export_query_conditions = dict(query_conditions)
 
             def export_task():
-                return export_table_data(export_data, file_path, table_name)
+                export_db = Database(config.DB_PATH)
+                try:
+                    results_dict = export_db.search_personnel(
+                        table_name=table_name,
+                        **export_query_conditions,
+                    )
+                    export_data = [dict(row) for row in results_dict.get(table_name, [])]
+                    return export_table_data(export_data, file_path, table_name)
+                finally:
+                    export_db.close()
 
             def handle_export_success(exported_count):
                 self.set_status(f"导出成功：{chinese_name}，{exported_count} 条，保存到 {file_path}")

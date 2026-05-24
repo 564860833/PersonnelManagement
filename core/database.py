@@ -6,13 +6,23 @@ import sqlite3
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
-from metadata.constants import COLUMN_LABEL_TO_FIELD, DEFAULT_PERMISSIONS, TABLE_NAMES, normalize_permissions, validate_table_name
+from metadata.constants import (
+    COLUMN_LABEL_TO_FIELD,
+    DEFAULT_PERMISSIONS,
+    TABLE_DATE_FIELDS,
+    TABLE_FIELD_LABELS,
+    TABLE_NAMES,
+    normalize_permissions,
+    validate_table_name,
+)
 
 logger = logging.getLogger("Database")
 
 
 RELATED_TABLES = ("rewards", "family", "resume")
 RELATED_IMPORT_IDENTITY_COLUMNS = {"id", "person_id", "sequence", "name"}
+DATE_DISPLAY_SUFFIX = "_display"
+BLANK_PLACEHOLDERS = {"-", "—", "–", "－", "无", "無", "暂无", "无日期", "n/a", "na"}
 
 RELATED_TABLE_COLUMNS = {
     "rewards": [
@@ -118,22 +128,44 @@ class Database:
     def _register_sqlite_functions(self):
         self.conn.create_function("personnel_month_key", 1, self._month_key)
 
+    @classmethod
+    def _month_key(cls, value) -> Optional[str]:
+        return cls._normalize_month_value(value)
+
     @staticmethod
-    def _month_key(value) -> Optional[str]:
+    def _is_blank_value(value) -> bool:
         if value is None:
+            return True
+
+        text = str(value).strip()
+        return not text or text.lower() in {"nan", "nat", "none", "<na>"} or text.casefold() in BLANK_PLACEHOLDERS
+
+    @staticmethod
+    def _date_display_value(value) -> str:
+        if Database._is_blank_value(value):
+            return ""
+        return str(value)
+
+    @classmethod
+    def _normalize_month_value(cls, value) -> Optional[str]:
+        if cls._is_blank_value(value):
             return None
 
         if isinstance(value, datetime):
-            return f"{value.year:04d}.{value.month:02d}"
+            return f"{value.year:04d}-{value.month:02d}"
         if isinstance(value, date):
-            return f"{value.year:04d}.{value.month:02d}"
+            return f"{value.year:04d}-{value.month:02d}"
 
         text = str(value).strip()
-        if not text or text.lower() in {"nan", "nat", "none"}:
-            return None
-
-        normalized = text.replace("/", ".").replace("-", ".")
-        match = re.match(r"^(\d{4})\.(\d{1,2})(?:\D|$)", normalized)
+        normalized = (
+            text.replace("年", "-")
+            .replace("月", "-")
+            .replace("日", "")
+            .replace("/", "-")
+            .replace(".", "-")
+        )
+        normalized = re.sub(r"-+", "-", normalized).strip("-")
+        match = re.match(r"^(\d{4})-(\d{1,2})(?:-\d{1,2})?(?:\s|T|$)", normalized)
         if not match:
             return None
 
@@ -141,7 +173,30 @@ class Database:
         month = int(match.group(2))
         if month < 1 or month > 12:
             return None
-        return f"{year:04d}.{month:02d}"
+        return f"{year:04d}-{month:02d}"
+
+    @staticmethod
+    def _date_display_column(field_name: str) -> str:
+        return f"{field_name}{DATE_DISPLAY_SUFFIX}"
+
+    @staticmethod
+    def _is_date_display_column(table_name: str, column_name: str) -> bool:
+        if not column_name.endswith(DATE_DISPLAY_SUFFIX):
+            return False
+        field_name = column_name[: -len(DATE_DISPLAY_SUFFIX)]
+        return field_name in TABLE_DATE_FIELDS.get(table_name, [])
+
+    @staticmethod
+    def _field_label(table_name: str, field_name: str) -> str:
+        labels = dict(TABLE_FIELD_LABELS.get(table_name, []))
+        return labels.get(field_name, field_name)
+
+    def _invalid_date_message(self, table_name: str, row_index: int, field_name: str, value) -> str:
+        label = self._field_label(table_name, field_name)
+        return (
+            f"第 {row_index} 行“{label}”格式无效，当前值为“{value}”。"
+            "请填写类似 1990-01、1990.01、1990/01、1990年1月 的年月，或直接留空。"
+        )
 
     def create_tables(self):
         """Create or migrate core data tables."""
@@ -220,6 +275,7 @@ class Database:
                 logger.info(f"表 {table_name} 创建/验证成功")
 
             self._migrate_related_tables()
+            self._migrate_date_display_columns()
             self._create_indexes()
             self.conn.commit()
         except sqlite3.Error as e:
@@ -235,6 +291,69 @@ class Database:
         )
         return f"CREATE TABLE IF NOT EXISTS {physical_table_name} ({', '.join(columns)});"
 
+    def _table_exists(self, table_name: str) -> bool:
+        cursor = self.conn.cursor()
+        row = cursor.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            (table_name,),
+        ).fetchone()
+        return row is not None
+
+    def _migrate_date_display_columns(self):
+        cursor = self.conn.cursor()
+        for table_name, date_fields in TABLE_DATE_FIELDS.items():
+            if not self._table_exists(table_name):
+                continue
+
+            columns = set(self.get_table_columns(table_name))
+            for field_name in date_fields:
+                if field_name not in columns:
+                    cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {field_name} TEXT")
+                    columns.add(field_name)
+
+                display_column = self._date_display_column(field_name)
+                if display_column not in columns:
+                    cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {display_column} TEXT")
+                    columns.add(display_column)
+
+            select_columns = ["id"]
+            for field_name in date_fields:
+                select_columns.append(field_name)
+                select_columns.append(self._date_display_column(field_name))
+
+            rows = cursor.execute(
+                f"SELECT {', '.join(select_columns)} FROM {table_name}"
+            ).fetchall()
+            for row in rows:
+                updates = []
+                values = []
+                for field_name in date_fields:
+                    display_column = self._date_display_column(field_name)
+                    current_value = row[field_name]
+                    display_value = row[display_column]
+
+                    normalized_value = self._normalize_month_value(current_value)
+                    if normalized_value is None and self._is_blank_value(current_value):
+                        normalized_value = self._normalize_month_value(display_value)
+
+                    target_display = display_value
+                    if self._is_blank_value(display_value) and not self._is_blank_value(current_value):
+                        target_display = str(current_value)
+
+                    if current_value != normalized_value:
+                        updates.append(f"{field_name}=?")
+                        values.append(normalized_value)
+                    if display_value != target_display:
+                        updates.append(f"{display_column}=?")
+                        values.append(target_display)
+
+                if updates:
+                    values.append(row["id"])
+                    cursor.execute(
+                        f"UPDATE {table_name} SET {', '.join(updates)} WHERE id=?",
+                        values,
+                    )
+
     def _create_indexes(self):
         cursor = self.conn.cursor()
         cursor.execute("""
@@ -246,6 +365,10 @@ class Database:
             CREATE UNIQUE INDEX IF NOT EXISTS idx_base_info_name_without_sequence
             ON base_info(name)
             WHERE sequence IS NULL OR TRIM(CAST(sequence AS TEXT)) = ''
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_base_info_birth_date
+            ON base_info(birth_date)
         """)
         for table_name in RELATED_TABLES:
             cursor.execute(
@@ -403,13 +526,14 @@ class Database:
 
     def _normalize_import_rows(self, table_name: str, data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         valid_columns = set(self.get_table_columns(table_name))
+        date_fields = set(TABLE_DATE_FIELDS.get(table_name, []))
         related_business_columns = []
         if table_name in RELATED_TABLES:
             valid_columns.update({"sequence", "name"})
             related_business_columns = self._related_business_columns(table_name)
 
         normalized_data = []
-        for row in data:
+        for row_index, row in enumerate(data, start=1):
             normalized_row = {}
             for col_name, value in row.items():
                 normalized_col = self.normalize_column_name(col_name)
@@ -417,10 +541,19 @@ class Database:
                 if normalized_col in valid_columns:
                     if normalized_col == "sequence":
                         value = self._sequence_value_for_storage(value)
-                    elif table_name == "base_info" and normalized_col == "birth_date":
-                        month_key = self._month_key(value)
-                        if month_key:
-                            value = month_key
+                        normalized_row[normalized_col] = value
+                        continue
+
+                    if normalized_col in date_fields:
+                        normalized_value = self._normalize_month_value(value)
+                        if normalized_value is None and not self._is_blank_import_value(value):
+                            raise ValueError(self._invalid_date_message(table_name, row_index, normalized_col, value))
+                        normalized_row[normalized_col] = normalized_value
+                        display_column = self._date_display_column(normalized_col)
+                        if display_column in valid_columns and display_column not in normalized_row:
+                            normalized_row[display_column] = self._date_display_value(value)
+                        continue
+
                     normalized_row[normalized_col] = value
             if normalized_row:
                 if (
@@ -433,17 +566,16 @@ class Database:
 
     @staticmethod
     def _is_blank_import_value(value) -> bool:
-        if value is None:
-            return True
-
-        text = str(value).strip()
-        return not text or text.lower() in {"nan", "nat", "none", "<na>"}
+        return Database._is_blank_value(value)
 
     def _related_business_columns(self, table_name: str) -> List[str]:
         return [
             column
             for column in self.get_table_columns(table_name)
-            if column not in RELATED_IMPORT_IDENTITY_COLUMNS
+            if (
+                column not in RELATED_IMPORT_IDENTITY_COLUMNS
+                and not self._is_date_display_column(table_name, column)
+            )
         ]
 
     def _has_related_business_content(self, row: Dict[str, Any], business_columns: List[str]) -> bool:
@@ -641,13 +773,21 @@ class Database:
 
         return text
 
+    def _get_related_select_columns(self, table_name: str) -> List[str]:
+        select_columns = list(RELATED_TABLE_DISPLAY_COLUMNS[table_name])
+        for field_name in TABLE_DATE_FIELDS.get(table_name, []):
+            display_column = f"r.{field_name}{DATE_DISPLAY_SUFFIX}"
+            if display_column not in select_columns:
+                select_columns.append(display_column)
+        return select_columns
+
     def _fetch_related_person_data(self, table_name: str, person_ids: List[int]) -> List[Dict]:
         validate_table_name(table_name)
         if table_name not in RELATED_TABLES or not person_ids:
             return []
 
         placeholders = ", ".join(["?"] * len(person_ids))
-        select_columns = ", ".join(RELATED_TABLE_DISPLAY_COLUMNS[table_name])
+        select_columns = ", ".join(self._get_related_select_columns(table_name))
         cursor = self.conn.cursor()
         cursor.execute(
             f"""
@@ -661,6 +801,69 @@ class Database:
         )
         return [dict(row) for row in cursor.fetchall()]
 
+    def _build_personnel_search_clause(
+        self,
+        *,
+        name: str = None,
+        grades: list = None,
+        position: list = None,
+        birth_start: str = None,
+        birth_end: str = None,
+        education: list = None,
+        parttime_education: list = None,
+        table_alias: str = "b",
+    ) -> tuple:
+        alias = f"{table_alias}." if table_alias else ""
+        base_conditions = []
+        params = []
+
+        if name:
+            base_conditions.append(f"{alias}name LIKE ?")
+            params.append(f"%{name}%")
+
+        if grades:
+            grade_conditions = []
+            for grade in grades:
+                grade_conditions.append(f"{alias}current_grade LIKE ?")
+                params.append(f"%{grade}%")
+            base_conditions.append(f"({' OR '.join(grade_conditions)})")
+
+        if position:
+            position_conditions = []
+            for pos in position:
+                position_conditions.append(f"{alias}current_position = ?")
+                params.append(pos)
+            base_conditions.append(f"({' OR '.join(position_conditions)})")
+
+        birth_start_key = self._month_key(birth_start)
+        birth_end_key = self._month_key(birth_end)
+        if birth_start_key and birth_end_key:
+            base_conditions.append(f"({alias}birth_date BETWEEN ? AND ?)")
+            params.append(birth_start_key)
+            params.append(birth_end_key)
+        elif birth_start_key:
+            base_conditions.append(f"{alias}birth_date >= ?")
+            params.append(birth_start_key)
+        elif birth_end_key:
+            base_conditions.append(f"{alias}birth_date <= ?")
+            params.append(birth_end_key)
+
+        if education:
+            edu_conditions = []
+            for keyword in education:
+                edu_conditions.append(f"{alias}fulltime_education LIKE ?")
+                params.append(f"%{keyword}%")
+            base_conditions.append(f"({' OR '.join(edu_conditions)})")
+
+        if parttime_education:
+            parttime_conditions = []
+            for keyword in parttime_education:
+                parttime_conditions.append(f"{alias}parttime_education LIKE ?")
+                params.append(f"%{keyword}%")
+            base_conditions.append(f"({' OR '.join(parttime_conditions)})")
+
+        return base_conditions, params
+
     def search_personnel(
         self,
         name: str = None,
@@ -670,71 +873,75 @@ class Database:
         birth_end: str = None,
         education: str = None,
         parttime_education: str = None,
+        table_name: str = None,
+        limit: int = None,
+        offset: int = 0,
     ):
         try:
-            base_conditions = []
-            params = []
-
-            if name:
-                base_conditions.append("name LIKE ?")
-                params.append(f"%{name}%")
-
-            if grades:
-                grade_conditions = []
-                for grade in grades:
-                    grade_conditions.append("current_grade LIKE ?")
-                    params.append(f"%{grade}%")
-                base_conditions.append(f"({' OR '.join(grade_conditions)})")
-
-            if position:
-                position_conditions = []
-                for pos in position:
-                    position_conditions.append("current_position = ?")
-                    params.append(pos)
-                base_conditions.append(f"({' OR '.join(position_conditions)})")
-
-            birth_start_key = self._month_key(birth_start)
-            birth_end_key = self._month_key(birth_end)
-            if birth_start_key and birth_end_key:
-                base_conditions.append("(personnel_month_key(birth_date) BETWEEN ? AND ?)")
-                params.append(birth_start_key)
-                params.append(birth_end_key)
-            elif birth_start_key:
-                base_conditions.append("personnel_month_key(birth_date) >= ?")
-                params.append(birth_start_key)
-            elif birth_end_key:
-                base_conditions.append("personnel_month_key(birth_date) <= ?")
-                params.append(birth_end_key)
-
-            if education:
-                edu_conditions = []
-                for keyword in education:
-                    edu_conditions.append("fulltime_education LIKE ?")
-                    params.append(f"%{keyword}%")
-                base_conditions.append(f"({' OR '.join(edu_conditions)})")
-
-            if parttime_education:
-                parttime_conditions = []
-                for keyword in parttime_education:
-                    parttime_conditions.append("parttime_education LIKE ?")
-                    params.append(f"%{keyword}%")
-                base_conditions.append(f"({' OR '.join(parttime_conditions)})")
-
-            base_sql = "SELECT * FROM base_info"
-            if base_conditions:
-                base_sql += " WHERE " + " AND ".join(base_conditions)
-
             cursor = self.conn.cursor()
-            cursor.execute(base_sql, params)
-            base_info_data = [dict(row) for row in cursor.fetchall()]
-            person_ids = [row["id"] for row in base_info_data if row.get("id") is not None]
+            base_conditions, params = self._build_personnel_search_clause(
+                name=name,
+                grades=grades,
+                position=position,
+                birth_start=birth_start,
+                birth_end=birth_end,
+                education=education,
+                parttime_education=parttime_education,
+                table_alias="b",
+            )
+            where_sql = " WHERE " + " AND ".join(base_conditions) if base_conditions else ""
+            paginated = limit is not None
+            effective_table = table_name or "base_info"
 
-            results = {"base_info": base_info_data}
-            results["rewards"] = self._fetch_related_person_data("rewards", person_ids)
-            results["family"] = self._fetch_related_person_data("family", person_ids)
-            results["resume"] = self._fetch_related_person_data("resume", person_ids)
+            if table_name is not None:
+                validate_table_name(table_name)
 
-            logger.info(f"搜索完成，找到 {len(base_info_data)} 条基础信息记录")
+            if table_name is None and not paginated:
+                base_sql = f"SELECT b.* FROM base_info b{where_sql} ORDER BY b.id"
+                cursor.execute(base_sql, params)
+                base_info_data = [dict(row) for row in cursor.fetchall()]
+                person_ids = [row["id"] for row in base_info_data if row.get("id") is not None]
+
+                results = {"base_info": base_info_data}
+                results["rewards"] = self._fetch_related_person_data("rewards", person_ids)
+                results["family"] = self._fetch_related_person_data("family", person_ids)
+                results["resume"] = self._fetch_related_person_data("resume", person_ids)
+                results["total_count"] = len(base_info_data)
+
+                logger.info(f"搜索完成，找到 {len(base_info_data)} 条基础信息记录")
+                return results
+
+            if effective_table == "base_info":
+                count_sql = f"SELECT COUNT(*) AS total_count FROM base_info b{where_sql}"
+                cursor.execute(count_sql, params)
+                total_count = int(cursor.fetchone()["total_count"])
+
+                base_sql = f"SELECT b.* FROM base_info b{where_sql} ORDER BY b.id"
+                query_params = list(params)
+                if paginated:
+                    base_sql += " LIMIT ? OFFSET ?"
+                    query_params.extend([limit, max(0, offset or 0)])
+                cursor.execute(base_sql, query_params)
+                rows = [dict(row) for row in cursor.fetchall()]
+                results = {"base_info": rows, "total_count": total_count}
+                logger.info(f"搜索完成，找到 {total_count} 条基础信息记录")
+                return results
+
+            join_sql = f" FROM {effective_table} r JOIN base_info b ON b.id = r.person_id{where_sql}"
+            count_sql = f"SELECT COUNT(*) AS total_count{join_sql}"
+            cursor.execute(count_sql, params)
+            total_count = int(cursor.fetchone()["total_count"])
+
+            select_columns = ", ".join(self._get_related_select_columns(effective_table))
+            data_sql = f"SELECT {select_columns}{join_sql} ORDER BY r.person_id, r.id"
+            query_params = list(params)
+            if paginated:
+                data_sql += " LIMIT ? OFFSET ?"
+                query_params.extend([limit, max(0, offset or 0)])
+            cursor.execute(data_sql, query_params)
+            rows = [dict(row) for row in cursor.fetchall()]
+            results = {effective_table: rows, "total_count": total_count}
+            logger.info(f"搜索完成，找到 {total_count} 条 {effective_table} 记录")
             return results
 
         except sqlite3.Error as e:
@@ -770,7 +977,7 @@ class Database:
         try:
             cursor = self.conn.cursor()
             if table_name in RELATED_TABLES:
-                select_columns = ", ".join(RELATED_TABLE_DISPLAY_COLUMNS[table_name])
+                select_columns = ", ".join(self._get_related_select_columns(table_name))
                 cursor.execute(
                     f"""
                     SELECT {select_columns}
@@ -806,6 +1013,7 @@ class Database:
                 (key, str(value))
                 for key, value in record.items()
                 if key not in RELATED_IMPORT_IDENTITY_COLUMNS
+                and not key.endswith(DATE_DISPLAY_SUFFIX)
             )
         )
         return person_id, content_key
@@ -868,11 +1076,8 @@ class Database:
         duplicates = []
         seen_record_keys = set()
         related_business_columns = self._related_business_columns(table_name)
-        for record in records:
-            normalized_record = {
-                self.normalize_column_name(column_name): value
-                for column_name, value in record.items()
-            }
+        normalized_records = self._normalize_import_rows(table_name, records)
+        for normalized_record in normalized_records:
             if not self._has_related_business_content(normalized_record, related_business_columns):
                 continue
 
@@ -901,7 +1106,11 @@ class Database:
         comparable_columns = [
             column
             for column in record
-            if column in table_columns and column not in {"id", "person_id", "sequence", "name"}
+            if (
+                column in table_columns
+                and column not in {"id", "person_id", "sequence", "name"}
+                and not self._is_date_display_column(table_name, column)
+            )
         ]
         conditions = ["person_id = ?"]
         params = [person_id]

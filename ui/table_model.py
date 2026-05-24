@@ -52,17 +52,20 @@ class ResultTableModel(QAbstractTableModel):
         row = self.rows[index.row()]
         field_name = self.fields[index.column()]
         value = row.get(field_name, "")
+        display_value = None
+        if field_name in TABLE_DATE_FIELDS.get(self.table_name, []):
+            display_value = row.get(f"{field_name}_display")
         if value is None:
             value = ""
 
         if role == Qt.DisplayRole:
-            return self.format_value(field_name, value)
+            return self.format_value(field_name, value, display_value)
 
         if role == Qt.TextAlignmentRole:
             return Qt.AlignCenter
 
         if role == Qt.ToolTipRole:
-            return str(value)
+            return self.format_value(field_name, value, display_value)
 
         if role == Qt.BackgroundRole:
             if index.row() % 2 == 1:
@@ -82,11 +85,16 @@ class ResultTableModel(QAbstractTableModel):
 
         return str(self.start_index + section + 1)
 
-    def format_value(self, field_name: str, value):
+    def format_value(self, field_name: str, value, display_value=None):
         if field_name not in TABLE_DATE_FIELDS.get(self.table_name, []):
             return str(value)
 
+        if display_value is not None and str(display_value) != "":
+            return str(display_value)
+
         text = str(value)
+        if re.match(r'^\d{4}-\d{2}$', text):
+            return text
         if re.match(r'^\d{4}-\d{2}-\d{2}$', text):
             return text[:7].replace('-', '.')
         if re.match(r'^\d{4}\.\d{2}$', text):
