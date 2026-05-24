@@ -968,6 +968,16 @@ class AIChatDirectModelTests(unittest.TestCase):
         self.assertIn("background-color: #F6F8FA", rendered)
         self.assertIn('<table style="border-collapse: collapse; width: 100%; margin: 8px 0;">', rendered)
 
+    def test_ai_message_escapes_raw_html_but_keeps_markdown(self):
+        rendered = render_message_html(
+            "assistant",
+            "<script>alert(1)</script>\n**bold**",
+        )
+
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", rendered)
+        self.assertNotIn("<script>alert(1)</script>", rendered)
+        self.assertIn("<strong>bold</strong>", rendered)
+
     def test_error_message_renders_as_left_red_bubble(self):
         rendered = render_message_html("assistant", "network failed", is_error=True)
 

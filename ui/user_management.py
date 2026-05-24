@@ -12,6 +12,11 @@ from ui.styles import DIALOG_BASE_STYLE, DIALOG_BUTTON_STYLE, RESULT_TABLE_STYLE
 logger = logging.getLogger('UserMgr')
 
 
+def _has_surrounding_whitespace(value: str) -> bool:
+    text = "" if value is None else str(value)
+    return text != text.strip()
+
+
 def _permission_icon(enabled: bool) -> QIcon:
     pixmap = QPixmap(24, 24)
     pixmap.fill(Qt.transparent)
@@ -176,8 +181,10 @@ class AddUserDialog(QDialog):
 
     def on_ok(self):
         username = self.username_input.text().strip()
-        password = self.password_input.text()
-        confirm = self.confirm_input.text()
+        password_raw = self.password_input.text()
+        confirm_raw = self.confirm_input.text()
+        password = password_raw.strip()
+        confirm = confirm_raw.strip()
 
         if not username:
             QMessageBox.warning(self, "输入错误", "用户名不能为空")
@@ -185,6 +192,10 @@ class AddUserDialog(QDialog):
 
         if self.db.is_reserved_admin_username(username):
             QMessageBox.warning(self, "用户名不可用", "admin 是系统保留管理员账号，请使用其他用户名")
+            return
+
+        if _has_surrounding_whitespace(password_raw) or _has_surrounding_whitespace(confirm_raw):
+            QMessageBox.warning(self, "输入错误", "密码和确认密码首尾不能包含空白字符")
             return
 
         if not password:

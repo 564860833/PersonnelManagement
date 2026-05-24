@@ -8,6 +8,12 @@ import logging
 
 logger = logging.getLogger('ChangePwd')
 
+
+def _has_surrounding_whitespace(value: str) -> bool:
+    text = "" if value is None else str(value)
+    return text != text.strip()
+
+
 class ChangePasswordDialog(QDialog):
     def __init__(self, db, username):
         super().__init__()
@@ -73,11 +79,19 @@ class ChangePasswordDialog(QDialog):
 
     def on_ok(self):
         old = self.old_edit.text().strip()
-        new = self.new_edit.text().strip()
-        confirm = self.confirm_edit.text().strip()
+        new_raw = self.new_edit.text()
+        confirm_raw = self.confirm_edit.text()
+        new = new_raw.strip()
+        confirm = confirm_raw.strip()
 
-        if not old or not new:
-            QMessageBox.warning(self, "输入错误", "旧密码和新密码均不能为空")
+        if not old:
+            QMessageBox.warning(self, "输入错误", "旧密码不能为空")
+            return
+        if _has_surrounding_whitespace(new_raw) or _has_surrounding_whitespace(confirm_raw):
+            QMessageBox.warning(self, "输入错误", "新密码和确认密码首尾不能包含空白字符")
+            return
+        if not new:
+            QMessageBox.warning(self, "输入错误", "新密码不能为空")
             return
         if new != confirm:
             QMessageBox.warning(self, "输入错误", "两次输入的新密码不一致")

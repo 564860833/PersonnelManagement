@@ -653,7 +653,8 @@ def render_bubble_html(
 
 def render_markdown_html(content: str) -> str:
     try:
-        rendered = markdown.markdown(str(content), extensions=["extra", "tables"])
+        safe_content = html.escape(str(content))
+        rendered = markdown.markdown(safe_content, extensions=["extra", "tables"])
         return style_markdown_tables(rendered)
     except Exception as e:
         logger.error("Markdown 渲染失败: %s", e)
