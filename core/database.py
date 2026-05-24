@@ -96,10 +96,11 @@ RELATED_TABLE_DISPLAY_COLUMNS = {
 }
 
 
+os.environ["DISABLE_XML"] = "1"
+
+
 class Database:
     def __init__(self, db_path=None):
-        os.environ["DISABLE_XML"] = "1"
-
         self.conn = None
         self.connect(db_path)
         self.create_tables()
@@ -1156,7 +1157,10 @@ class Database:
             logger.info("数据库连接已关闭")
 
     def __del__(self):
-        self.close()
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def add_user(self, username: str, password: str) -> bool:
         if self.is_reserved_admin_username(username):

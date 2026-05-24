@@ -11,6 +11,7 @@ env/
 # IDE/editor local files
 .idea/
 .vscode/
+.claude/
 
 # Logs
 *.log

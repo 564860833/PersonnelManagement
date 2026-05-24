@@ -158,7 +158,6 @@ class LogViewer(QDialog):
         # 常见的编码映射
         encoding_map = {
             'gb2312': 'gbk',
-            'gb18030': 'gbk',
             'big5': 'cp950',
         }
 

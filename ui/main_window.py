@@ -589,10 +589,15 @@ class MainWindow(QMainWindow):
         dlg.exec_()
 
     def closeEvent(self, event):
-        """关闭时确保数据库连接关闭"""
+        """关闭时等待后台线程并关闭数据库连接"""
         logger.info(f"用户 {self.username} 退出系统")
         if self.query_tab is not None and hasattr(self.query_tab, 'close_ai_dialog'):
             self.query_tab.close_ai_dialog()
+        for task_ref in self._background_tasks:
+            thread = task_ref.get("thread")
+            if thread and thread.isRunning():
+                thread.quit()
+                thread.wait(3000)
         if hasattr(self.db, 'close'):
             self.db.close()
         event.accept()

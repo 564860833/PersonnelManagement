@@ -125,12 +125,16 @@ def _prepare_import_records_with_metadata(
 
                                 if df_row >= 0 and df_row < len(df) and df_col < len(df.columns):
                                     # 直接赋值，不再检查列名
-                                    df.iat[df_row, df_col] = str(value) if value else ""
+                                    df.iat[df_row, df_col] = str(value) if value is not None else ""
 
                     logger.info(f"成功处理 {len(merged_ranges)} 个合并单元格（.xlsx格式）")
                 except Exception as merge_error:
                     logger.error(f"处理.xlsx合并单元格时出错: {str(merge_error)}", exc_info=True)
-                    logger.warning("将继续导入，但合并单元格可能未被正确处理")
+                    return False, (
+                        f"无法读取合并单元格信息，导入已终止。\n"
+                        f"原因: {str(merge_error)}\n"
+                        f"请关闭正在打开此文件的程序后重试。"
+                    ), [], []
 
             elif file_ext == '.xls':
                 if xlrd is None:
@@ -165,12 +169,16 @@ def _prepare_import_records_with_metadata(
                                     df_col = c
                                     if df_row < len(df) and df_col < len(df.columns):
                                         # 直接赋值，不再检查列名
-                                        df.iat[df_row, df_col] = str(value) if value else ""
+                                        df.iat[df_row, df_col] = str(value) if value is not None else ""
 
                     logger.info(f"成功处理 {len(merged_cells)} 个合并单元格（.xls格式）")
                 except Exception as merge_error:
                     logger.error(f"处理.xls合并单元格时出错: {str(merge_error)}", exc_info=True)
-                    logger.warning("将继续导入，但合并单元格可能未被正确处理")
+                    return False, (
+                        f"无法读取合并单元格信息，导入已终止。\n"
+                        f"原因: {str(merge_error)}\n"
+                        f"请关闭正在打开此文件的程序后重试。"
+                    ), [], []
 
 
         # 清理列名
