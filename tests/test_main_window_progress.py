@@ -145,6 +145,9 @@ class MainWindowProgressDialogTests(unittest.TestCase):
                     "total_count": 2,
                 }
 
+            def get_assessment_years(self):
+                return [2020, 2021, 2022, 2023, 2024]
+
             def close(self):
                 self.closed = True
 
@@ -164,6 +167,7 @@ class MainWindowProgressDialogTests(unittest.TestCase):
             [{"sequence": 1, "name": "张三"}, {"sequence": 2, "name": "李四"}],
             "D:/tmp/base_info.xlsx",
             "base_info",
+            [2020, 2021, 2022, 2023, 2024],
         )
         self.assertEqual(2, exported_count)
         self.assertTrue(fake_db.closed)

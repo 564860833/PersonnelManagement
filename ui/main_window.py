@@ -299,7 +299,8 @@ class MainWindow(QMainWindow):
                         **export_query_conditions,
                     )
                     export_data = [dict(row) for row in results_dict.get(table_name, [])]
-                    return export_table_data(export_data, file_path, table_name)
+                    assessment_years = export_db.get_assessment_years()
+                    return export_table_data(export_data, file_path, table_name, assessment_years)
                 finally:
                     export_db.close()
 

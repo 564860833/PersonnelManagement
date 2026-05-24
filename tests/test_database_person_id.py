@@ -357,7 +357,7 @@ class DatabasePersonIdTests(unittest.TestCase):
         columns = list(pd.read_excel(path).columns)
         self.assertNotIn("id", columns)
         self.assertNotIn("person_id", columns)
-        self.assertEqual(["sequence", "name", "reward_name"], columns)
+        self.assertEqual(["序号", "姓名", "奖励名称"], columns)
 
     def test_export_uses_date_display_and_hides_display_columns(self):
         path = self.make_db_path() + ".xlsx"
@@ -377,8 +377,47 @@ class DatabasePersonIdTests(unittest.TestCase):
         )
 
         exported = pd.read_excel(path, dtype=str)
-        self.assertEqual(["sequence", "name", "reward_date"], list(exported.columns))
-        self.assertEqual("2024.01", exported.iloc[0]["reward_date"])
+        self.assertEqual(["序号", "姓名", "奖励批准日期"], list(exported.columns))
+        self.assertEqual("2024.01", exported.iloc[0]["奖励批准日期"])
+
+    def test_export_uses_assessment_year_labels_before_remarks(self):
+        path = self.make_db_path() + ".xlsx"
+        self.addCleanup(lambda: os.path.exists(path) and os.remove(path))
+
+        export_table_data(
+            [
+                {
+                    "sequence": 1,
+                    "name": "张三",
+                    "assessment_0": "优秀",
+                    "assessment_1": "称职",
+                    "assessment_2": "称职",
+                    "assessment_3": "优秀",
+                    "assessment_4": "称职",
+                    "remarks": "备注",
+                    "extra_field": "不导出",
+                }
+            ],
+            path,
+            "base_info",
+            [2020, 2021, 2022, 2023, 2024],
+        )
+
+        exported = pd.read_excel(path, dtype=str)
+        self.assertEqual(
+            [
+                "序号",
+                "姓名",
+                "2020年年度考核结果",
+                "2021年年度考核结果",
+                "2022年年度考核结果",
+                "2023年年度考核结果",
+                "2024年年度考核结果",
+                "备注",
+            ],
+            list(exported.columns),
+        )
+        self.assertNotIn("extra_field", exported.columns)
 
 
 if __name__ == "__main__":

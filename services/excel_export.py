@@ -4,12 +4,17 @@ import logging
 
 import pandas as pd
 
-from metadata.constants import TABLE_DATE_FIELDS, TABLE_LABELS, validate_table_name
+from metadata.constants import (
+    TABLE_DATE_FIELDS,
+    TABLE_LABELS,
+    get_table_field_labels,
+    validate_table_name,
+)
 
 logger = logging.getLogger("ExcelExport")
 
 
-def export_table_data(data, file_path: str, table_name: str) -> int:
+def export_table_data(data, file_path: str, table_name: str, assessment_years=None) -> int:
     """Export table data to an Excel file and return exported row count."""
     validate_table_name(table_name)
     if not data:
@@ -30,6 +35,19 @@ def export_table_data(data, file_path: str, table_name: str) -> int:
     ]
     if internal_columns:
         df = df.drop(columns=internal_columns)
+
+    field_labels = get_table_field_labels(table_name, assessment_years)
+    ordered_columns = [
+        field_name
+        for field_name in field_labels
+        if field_name in df.columns
+    ]
+    df = df.loc[:, ordered_columns].rename(
+        columns={
+            field_name: field_labels[field_name]
+            for field_name in ordered_columns
+        }
+    )
 
     df.to_excel(file_path, index=False)
 
