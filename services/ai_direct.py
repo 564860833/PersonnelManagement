@@ -82,6 +82,7 @@ def ask_model(
     timeout: float = 120.0,
     history_messages: Optional[Sequence[Dict[str, str]]] = None,
     analysis_data_json: Optional[str] = None,
+    think: Optional[bool] = None,
 ) -> str:
     model_name = (model_name or "").strip()
     if not model_name:
@@ -92,7 +93,7 @@ def ask_model(
         if analysis_data_json is None
         else _build_messages_from_analysis_data_json(question, analysis_data_json, history_messages)
     )
-    answer_content = _post_chat(model_name, messages, n_ctx, timeout)
+    answer_content = _post_chat(model_name, messages, n_ctx, timeout, think=think)
     return str(answer_content).strip()
 
 
@@ -103,8 +104,9 @@ def ask_model_stream(
     n_ctx: int = 4096,
     timeout: float = 120.0,
     history_messages: Optional[Sequence[Dict[str, str]]] = None,
-    on_delta: Optional[Callable[[str], None]] = None,
+    on_delta: Optional[Callable[[dict], None]] = None,
     analysis_data_json: Optional[str] = None,
+    think: Optional[bool] = None,
 ) -> str:
     model_name = (model_name or "").strip()
     if not model_name:
@@ -115,7 +117,7 @@ def ask_model_stream(
         if analysis_data_json is None
         else _build_messages_from_analysis_data_json(question, analysis_data_json, history_messages)
     )
-    return _post_chat_stream(model_name, messages, n_ctx, timeout, on_delta=on_delta)
+    return _post_chat_stream(model_name, messages, n_ctx, timeout, on_delta=on_delta, think=think)
 
 
 def is_context_length_error(error: Exception) -> bool:
@@ -123,15 +125,25 @@ def is_context_length_error(error: Exception) -> bool:
     return any(pattern in error_text for pattern in CONTEXT_ERROR_PATTERNS)
 
 
-def _post_chat(model_name: str, messages: List[Dict[str, str]], n_ctx: int, timeout: float) -> str:
+def _post_chat(
+    model_name: str,
+    messages: List[Dict[str, str]],
+    n_ctx: int,
+    timeout: float,
+    think: Optional[bool] = None,
+) -> str:
+    payload = {
+        "model": model_name,
+        "messages": messages,
+        "stream": False,
+        "options": {"num_ctx": n_ctx},
+    }
+    if think is not None:
+        payload["think"] = bool(think)
+
     response = requests.post(
         ollama_api_url("/api/chat"),
-        json={
-            "model": model_name,
-            "messages": messages,
-            "stream": False,
-            "options": {"num_ctx": n_ctx},
-        },
+        json=payload,
         timeout=timeout,
     )
     response.raise_for_status()
@@ -143,16 +155,21 @@ def _post_chat_stream(
     messages: List[Dict[str, str]],
     n_ctx: int,
     timeout: float,
-    on_delta: Optional[Callable[[str], None]] = None,
+    on_delta: Optional[Callable[[dict], None]] = None,
+    think: Optional[bool] = None,
 ) -> str:
+    payload = {
+        "model": model_name,
+        "messages": messages,
+        "stream": True,
+        "options": {"num_ctx": n_ctx},
+    }
+    if think is not None:
+        payload["think"] = bool(think)
+
     response = requests.post(
         ollama_api_url("/api/chat"),
-        json={
-            "model": model_name,
-            "messages": messages,
-            "stream": True,
-            "options": {"num_ctx": n_ctx},
-        },
+        json=payload,
         timeout=timeout,
         stream=True,
     )
@@ -166,9 +183,12 @@ def _post_chat_stream(
             if data.get("error"):
                 raise RuntimeError(str(data.get("error")))
 
-            delta = _stream_delta_content(data)
-            if delta:
-                chunks.append(delta)
+            for delta in _stream_deltas(data):
+                delta_text = str(delta.get("text") or "")
+                if not delta_text:
+                    continue
+                if delta.get("kind") == "answer":
+                    chunks.append(delta_text)
                 if on_delta is not None:
                     on_delta(delta)
 
@@ -189,13 +209,22 @@ def _parse_stream_line(line: str) -> dict:
     return data
 
 
-def _stream_delta_content(data: dict) -> str:
+def _stream_deltas(data: dict) -> List[dict]:
+    deltas = []
     message = data.get("message")
     if isinstance(message, dict):
-        return str(message.get("content") or "")
+        thinking = str(message.get("thinking") or "")
+        if thinking:
+            deltas.append({"kind": "thinking", "text": thinking})
+        content = str(message.get("content") or "")
+        if content:
+            deltas.append({"kind": "answer", "text": content})
+        return deltas
     if "response" in data:
-        return str(data.get("response") or "")
-    return ""
+        response = str(data.get("response") or "")
+        if response:
+            deltas.append({"kind": "answer", "text": response})
+    return deltas
 
 
 def _error_texts(error: Exception) -> List[str]:

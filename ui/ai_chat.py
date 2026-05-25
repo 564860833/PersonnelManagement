@@ -31,7 +31,7 @@ from PyQt5.QtWidgets import (
 )
 
 from services.ai_context import recommend_context_length
-from services.ai_direct import ask_model, ask_model_stream, build_analysis_data_json, is_context_length_error
+from services.ai_direct import ask_model, ask_model_stream, build_analysis_data_json, build_messages, is_context_length_error
 from services.ollama_manager import APP_OLLAMA_HOST, fetch_ollama_models
 from app_paths import runtime_path
 from ui.styles import DIALOG_BASE_STYLE, DIALOG_BUTTON_STYLE
@@ -167,6 +167,7 @@ WHITESPACE_TOKEN_WEIGHT = 0.05
 MANUAL_CONTEXT_OPTIONS = (2048, 4096, 8192, 16384, 32768)
 AI_CHAT_WINDOW_WIDTH_RATIO = 0.68
 AI_CHAT_WINDOW_HEIGHT_RATIO = 0.70
+CHAT_ACTION_BUTTON_WIDTH = 92
 
 AI_CHAT_STYLE = """
 QSplitter::handle {
@@ -340,6 +341,34 @@ QPushButton#aiFieldTag:disabled {
     background-color: #F6F8FA;
     color: #57606A;
 }
+QPushButton#aiSidebarActionButton,
+QPushButton#aiThinkingButton {
+    min-height: 32px;
+    max-height: 32px;
+    padding: 4px 14px;
+    border: 1px solid #C9D1D9;
+    border-radius: 5px;
+    background-color: #FFFFFF;
+    color: #24292F;
+}
+QPushButton#aiSidebarActionButton:hover,
+QPushButton#aiThinkingButton:hover {
+    background-color: #EAF2FB;
+    border-color: #8BB6E8;
+    color: #174A8B;
+}
+QPushButton#aiThinkingButton:checked {
+    background-color: #1E5AA8;
+    border-color: #1E5AA8;
+    color: #FFFFFF;
+    font-weight: bold;
+}
+QPushButton#aiSidebarActionButton:disabled,
+QPushButton#aiThinkingButton:disabled {
+    background-color: #F6F8FA;
+    border-color: #EAEEF2;
+    color: #8C959F;
+}
 QFrame#aiCoreButtonGroup {
     background-color: transparent;
     border: none;
@@ -493,6 +522,29 @@ hr {
     border-top: 1px solid #E5EAF0;
     margin: 12px 0;
 }
+.thinking-section {
+    background-color: #F7FBFF;
+    border: 1px solid #CFE1F4;
+    border-radius: 8px;
+    padding: 9px 11px;
+    margin: 0 0 10px 0;
+    color: #57606A;
+    font-size: 12px;
+}
+.thinking-title,
+.answer-title {
+    font-weight: bold;
+    margin-bottom: 6px;
+}
+.thinking-title {
+    color: #174A8B;
+}
+.answer-title {
+    color: #24292F;
+}
+.answer-section {
+    margin-top: 4px;
+}
 """
 
 
@@ -501,7 +553,7 @@ class AIWorker(QObject):
 
     finished = pyqtSignal(object)
     failed = pyqtSignal(str)
-    delta = pyqtSignal(str)
+    delta = pyqtSignal(object)
     done = pyqtSignal()
 
     def __init__(
@@ -512,6 +564,7 @@ class AIWorker(QObject):
         n_ctx,
         history_messages=None,
         analysis_data_json=None,
+        think=None,
     ):
         super().__init__()
         self.question = question
@@ -520,6 +573,7 @@ class AIWorker(QObject):
         self.n_ctx = n_ctx
         self.history_messages = [dict(message) for message in history_messages or []]
         self.analysis_data_json = analysis_data_json
+        self.think = think
         self._is_running = True
 
     def stop(self):
@@ -551,14 +605,15 @@ class AIWorker(QObject):
             history_messages=self.history_messages,
             on_delta=self._handle_delta,
             analysis_data_json=self.analysis_data_json,
+            think=self.think,
         )
 
     def _handle_delta(self, delta):
         if self._is_running and delta:
-            self.delta.emit(str(delta))
+            self.delta.emit(delta)
 
 
-def render_message_html(role: str, content: str, is_error: bool = False) -> str:
+def render_message_html(role: str, content: str, is_error: bool = False, thinking: str = "") -> str:
     if is_error:
         body_html = html.escape(str(content)).replace("\n", "<br>")
         return render_bubble_html(
@@ -586,7 +641,7 @@ def render_message_html(role: str, content: str, is_error: bool = False) -> str:
             corner="right",
         )
     else:
-        body_html = render_markdown_html(content)
+        body_html = render_assistant_content_html(content, thinking)
         return render_bubble_html(
             body_html,
             align="left",
@@ -598,6 +653,27 @@ def render_message_html(role: str, content: str, is_error: bool = False) -> str:
             text_color="#24292F",
             corner="left",
         )
+
+
+def render_assistant_content_html(content: str, thinking: str = "") -> str:
+    thinking = str(thinking or "").strip()
+    content = str(content or "").strip()
+    if not thinking:
+        return render_markdown_html(content)
+
+    thinking_html = render_markdown_html(thinking)
+    answer_text = content or "正在生成正式回答..."
+    answer_html = render_markdown_html(answer_text)
+    return f"""
+        <div class="thinking-section">
+            <div class="thinking-title">深度思考</div>
+            <div class="thinking-body">{thinking_html}</div>
+        </div>
+        <div class="answer-section">
+            <div class="answer-title">正式回答</div>
+            <div class="answer-body">{answer_html}</div>
+        </div>
+    """
 
 
 def render_bubble_html(
@@ -962,6 +1038,20 @@ def estimate_payload_tokens(analysis_payload: dict) -> int:
     payload_text = json.dumps(analysis_payload or {}, ensure_ascii=False, separators=(",", ":"), default=str)
     raw_tokens = estimate_text_tokens(payload_text)
     return max(1, math.ceil(raw_tokens * (1 + CONTEXT_BUFFER_RATIO)))
+
+
+def estimate_messages_tokens(messages: list) -> int:
+    message_text = "\n".join(
+        f"{message.get('role', '')}\n{message.get('content', '')}"
+        for message in messages or []
+    )
+    raw_tokens = estimate_text_tokens(message_text)
+    return max(1, math.ceil(raw_tokens * (1 + CONTEXT_BUFFER_RATIO)))
+
+
+def estimate_chat_context_tokens(question: str, analysis_payload: dict, history_messages=None) -> int:
+    messages = build_messages(question, analysis_payload, history_messages)
+    return estimate_messages_tokens(messages)
 
 
 def format_token_count(token_count: int) -> str:
@@ -1876,11 +1966,24 @@ class AIChatDialog(QDialog):
 
         selected_payload = self.selected_analysis_payload()
         selection_key = self._selected_payload_cache_key
-        if selection_key == self._payload_token_cache_key and self._payload_token_cache_value is not None:
+        question = self.current_question_text()
+        history_snapshot = [dict(message) for message in _safe_instance_value(self, "history_messages", [])]
+        pressure_cache_key = (
+            selection_key,
+            question,
+            tuple(
+                (
+                    str(message.get("role", "")),
+                    str(message.get("content", "")),
+                )
+                for message in history_snapshot
+            ),
+        )
+        if pressure_cache_key == self._payload_token_cache_key and self._payload_token_cache_value is not None:
             estimated_tokens = self._payload_token_cache_value
         else:
-            estimated_tokens = estimate_payload_tokens(selected_payload)
-            self._payload_token_cache_key = selection_key
+            estimated_tokens = estimate_chat_context_tokens(question, selected_payload, history_snapshot)
+            self._payload_token_cache_key = pressure_cache_key
             self._payload_token_cache_value = estimated_tokens
         context_limit = max(
             1,
@@ -1908,6 +2011,12 @@ class AIChatDialog(QDialog):
         self.refresh_widget_style(pressure_bar)
         self.pressure_value_label.setText(f"{format_token_count(estimated_tokens)} / {format_token_count(context_limit)} tokens")
         self.pressure_hint_label.setText(hint)
+
+    def current_question_text(self) -> str:
+        input_field = _safe_instance_value(self, "input_field")
+        if input_field is None or not hasattr(input_field, "text"):
+            return ""
+        return str(input_field.text() or "").strip()
 
     def on_table_selection_changed(self, table_name: str):
         page = _safe_instance_value(self, "table_pages", {}).get(table_name)
@@ -2056,13 +2165,17 @@ class AIChatDialog(QDialog):
         action_row = QHBoxLayout()
         action_row.setSpacing(8)
         self.refresh_btn = QPushButton("刷新")
-        self.refresh_btn.setObjectName("secondaryButton")
+        self.refresh_btn.setObjectName("aiSidebarActionButton")
+        self.refresh_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.refresh_btn.clicked.connect(self.refresh_models)
-        self.clear_btn = QPushButton("清空对话")
-        self.clear_btn.setObjectName("secondaryButton")
-        self.clear_btn.clicked.connect(self.clear_chat)
-        action_row.addWidget(self.refresh_btn)
-        action_row.addWidget(self.clear_btn)
+        self.thinking_btn = QPushButton("深度思考")
+        self.thinking_btn.setObjectName("aiThinkingButton")
+        self.thinking_btn.setCheckable(True)
+        self.thinking_btn.setChecked(False)
+        self.thinking_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.thinking_btn.setToolTip("开启后请求支持思考的本地模型进行深度思考")
+        action_row.addWidget(self.refresh_btn, 1)
+        action_row.addWidget(self.thinking_btn, 1)
         settings_layout.addLayout(action_row)
 
         pressure_row = QHBoxLayout()
@@ -2127,14 +2240,21 @@ class AIChatDialog(QDialog):
         self.input_field.setObjectName("aiQuestionInput")
         self.input_field.setPlaceholderText("输入要分析的问题")
         self.input_field.returnPressed.connect(self.start_inference)
+        self.input_field.textChanged.connect(lambda _text: self.schedule_context_pressure_refresh())
 
         self.send_btn = QPushButton("发送")
         self.send_btn.setObjectName("primaryButton")
-        self.send_btn.setMinimumWidth(92)
+        self.send_btn.setFixedWidth(CHAT_ACTION_BUTTON_WIDTH)
         self.send_btn.clicked.connect(self.start_inference)
         self.send_btn.setDefault(True)
 
+        self.clear_btn = QPushButton("清空")
+        self.clear_btn.setObjectName("secondaryButton")
+        self.clear_btn.setFixedWidth(CHAT_ACTION_BUTTON_WIDTH)
+        self.clear_btn.clicked.connect(self.clear_chat)
+
         question_row.addWidget(self.input_field, 1)
+        question_row.addWidget(self.clear_btn)
         question_row.addWidget(self.send_btn)
         input_layout.addLayout(question_row)
 
@@ -2478,6 +2598,9 @@ class AIChatDialog(QDialog):
         if chat_history is not None and hasattr(chat_history, "clear"):
             chat_history.clear()
         self.status_label.setText("对话已清空，可继续提问。")
+        self._payload_token_cache_key = None
+        self._payload_token_cache_value = None
+        self.schedule_context_pressure_refresh()
 
     def start_inference(self):
         question = self.input_field.text().strip()
@@ -2504,6 +2627,7 @@ class AIChatDialog(QDialog):
         if self.current_context_recommendation is None:
             self.refresh_context_recommendation(model_name)
         n_ctx = int(self.current_context_n_ctx or 4096)
+        think = self.thinking_enabled()
 
         self.append_message("user", question)
         self.input_field.clear()
@@ -2515,6 +2639,7 @@ class AIChatDialog(QDialog):
         history_snapshot = [dict(message) for message in self.history_messages]
         self._pending_history_length = len(self.history_messages)
         self.history_messages.append({"role": "user", "content": question})
+        self.schedule_context_pressure_refresh()
 
         self.worker = AIWorker(
             question,
@@ -2523,7 +2648,9 @@ class AIChatDialog(QDialog):
             n_ctx,
             history_snapshot,
             analysis_data_json=analysis_data_json,
+            think=think,
         )
+
         self.worker_thread = QThread(self)
         self.worker.moveToThread(self.worker_thread)
         self.worker.delta.connect(self.handle_stream_delta)
@@ -2567,32 +2694,62 @@ class AIChatDialog(QDialog):
             {
                 "role": role,
                 "content": str(content),
+                "thinking": "",
                 "is_error": bool(is_error),
             }
         )
         self._render_chat_history()
 
     def handle_stream_delta(self, delta):
-        delta = str(delta or "")
-        if not delta or not _safe_instance_value(self, "is_inference_running", False):
+        stream_delta = self.normalize_stream_delta(delta)
+        delta_text = stream_delta["text"]
+        if not delta_text or not _safe_instance_value(self, "is_inference_running", False):
             return
 
         messages = self._display_messages()
         streaming_index = _safe_instance_value(self, "_streaming_message_index")
+        created_message = False
         if not isinstance(streaming_index, int) or not (0 <= streaming_index < len(messages)):
-            messages.append({"role": "assistant", "content": delta, "is_error": False})
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "thinking": "",
+                    "is_error": False,
+                }
+            )
             self._streaming_message_index = len(messages) - 1
+            streaming_index = self._streaming_message_index
+            created_message = True
+
+        target_field = "thinking" if stream_delta["kind"] == "thinking" else "content"
+        messages[streaming_index][target_field] = (
+            str(messages[streaming_index].get(target_field, "")) + delta_text
+        )
+        if stream_delta["kind"] == "thinking":
+            self.status_label.setText("AI 正在深度思考...")
+        else:
+            self.status_label.setText("AI 正在生成正式回答...")
+
+        if created_message:
             self._stream_render_pending = False
             self._render_chat_history()
             return
 
-        messages[streaming_index]["content"] = str(messages[streaming_index].get("content", "")) + delta
         self._stream_render_pending = True
         stream_timer = _safe_instance_value(self, "stream_render_timer")
         if stream_timer is not None and hasattr(stream_timer, "start"):
             stream_timer.start()
         else:
             self._flush_stream_render()
+
+    def normalize_stream_delta(self, delta) -> dict:
+        if isinstance(delta, dict):
+            kind = str(delta.get("kind") or "answer").strip()
+            if kind not in {"thinking", "answer"}:
+                kind = "answer"
+            return {"kind": kind, "text": str(delta.get("text") or "")}
+        return {"kind": "answer", "text": str(delta or "")}
 
     def _flush_stream_render(self):
         if not _safe_instance_value(self, "_stream_render_pending", False):
@@ -2617,6 +2774,7 @@ class AIChatDialog(QDialog):
                 message.get("role", "assistant"),
                 message.get("content", ""),
                 is_error=bool(message.get("is_error", False)),
+                thinking=message.get("thinking", ""),
             )
             for message in self._display_messages()
         ]
@@ -2666,6 +2824,7 @@ class AIChatDialog(QDialog):
             return
         self.status_label.setText(status_text)
         self.update_action_state()
+        self.schedule_context_pressure_refresh()
 
     def update_action_state(self):
         has_model = bool(self.selected_model_name())
@@ -2676,6 +2835,7 @@ class AIChatDialog(QDialog):
         model_combo = _safe_instance_value(self, "model_combo")
         refresh_btn = _safe_instance_value(self, "refresh_btn")
         clear_btn = _safe_instance_value(self, "clear_btn")
+        thinking_btn = _safe_instance_value(self, "thinking_btn")
         if send_btn is not None:
             send_btn.setEnabled(has_model and has_selected_payload and not busy)
         if input_field is not None:
@@ -2686,6 +2846,8 @@ class AIChatDialog(QDialog):
             refresh_btn.setEnabled(not busy)
         if clear_btn is not None:
             clear_btn.setEnabled(not busy)
+        if thinking_btn is not None:
+            thinking_btn.setEnabled(not busy)
         if _safe_instance_value(self, "chat_nav_btn") is not None:
             _safe_instance_value(self, "chat_nav_btn").setEnabled(not busy)
         for table_name, nav_button in _safe_instance_value(self, "table_nav_buttons", {}).items():
@@ -2701,6 +2863,12 @@ class AIChatDialog(QDialog):
     def selected_model_name(self) -> str:
         model_name = self.model_combo.currentText().strip()
         return model_name if self.is_valid_model_name(model_name) else ""
+
+    def thinking_enabled(self) -> bool:
+        thinking_btn = _safe_instance_value(self, "thinking_btn")
+        if thinking_btn is None or not hasattr(thinking_btn, "isChecked"):
+            return False
+        return bool(thinking_btn.isChecked())
 
     def is_valid_model_name(self, model_name: str) -> bool:
         model_name = (model_name or "").strip()

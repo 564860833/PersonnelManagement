@@ -9,7 +9,7 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt5.QtCore import QPoint, Qt
-from PyQt5.QtWidgets import QApplication, QComboBox, QWidget
+from PyQt5.QtWidgets import QApplication, QComboBox, QSizePolicy, QWidget
 
 from services.ai_context import ContextRecommendation, HardwareSnapshot
 from services.ai_direct import ask_model, ask_model_stream, build_analysis_data_json, build_messages
@@ -19,6 +19,7 @@ from ui.ai_chat import (
     AIWorker,
     AI_CHAT_WINDOW_HEIGHT_RATIO,
     AI_CHAT_WINDOW_WIDTH_RATIO,
+    CHAT_ACTION_BUTTON_WIDTH,
     CORE_FIELDS,
     CoreFieldSelectionDialog,
     FieldSelectionPage,
@@ -28,7 +29,7 @@ from ui.ai_chat import (
     TableNavItem,
     TableEnableSwitch,
     core_fields_for_table,
-    estimate_payload_tokens,
+    estimate_chat_context_tokens,
     filter_analysis_payload_by_columns,
     group_columns_for_table,
     render_message_html,
@@ -190,6 +191,8 @@ class FakeButton(FakeWidget):
         self.text_value = text
         self.tooltip = ""
         self.checked = False
+        self.checkable = False
+        self.fixed_width = None
 
     def setText(self, text):
         self.text_value = text
@@ -200,8 +203,23 @@ class FakeButton(FakeWidget):
     def setToolTip(self, text):
         self.tooltip = text
 
+    def setCheckable(self, checkable):
+        self.checkable = checkable
+
     def setChecked(self, checked):
         self.checked = checked
+
+    def isChecked(self):
+        return self.checked
+
+    def setFixedWidth(self, width):
+        self.fixed_width = width
+
+    def minimumWidth(self):
+        return self.fixed_width or 0
+
+    def maximumWidth(self):
+        return self.fixed_width or 16777215
 
 
 class FakeLineEdit(FakeWidget):
@@ -413,6 +431,7 @@ class TestAIChatDialogBehavior(unittest.TestCase):
         dialog.send_btn = FakeButton()
         dialog.refresh_btn = FakeButton()
         dialog.clear_btn = FakeButton()
+        dialog.thinking_btn = FakeButton("深度思考")
         dialog.chat_history = FakeHistory()
         dialog.chat_nav_btn = FakeButton()
         dialog.workspace_stack = type(
@@ -865,7 +884,7 @@ class TestAIChatDialogBehavior(unittest.TestCase):
         dialog = self.make_dialog()
         self.build_page(dialog)
 
-        with patch("ui.ai_chat.estimate_payload_tokens", wraps=estimate_payload_tokens) as estimate:
+        with patch("ui.ai_chat.estimate_chat_context_tokens", wraps=estimate_chat_context_tokens) as estimate:
             dialog.refresh_context_pressure()
             dialog.refresh_context_pressure()
 
@@ -875,6 +894,35 @@ class TestAIChatDialogBehavior(unittest.TestCase):
             dialog.refresh_context_pressure()
 
             self.assertEqual(2, estimate.call_count)
+
+    def test_context_pressure_cache_includes_question_and_history(self):
+        dialog = self.make_dialog()
+        self.build_page(dialog)
+
+        with patch("ui.ai_chat.estimate_chat_context_tokens", wraps=estimate_chat_context_tokens) as estimate:
+            dialog.refresh_context_pressure()
+            dialog.input_field._text = "统计当前职级"
+            dialog.refresh_context_pressure()
+            dialog.history_messages.append({"role": "assistant", "content": "上一轮回答"})
+            dialog.refresh_context_pressure()
+
+            self.assertEqual(3, estimate.call_count)
+
+    def test_refresh_context_pressure_estimates_full_prompt_context(self):
+        dialog = self.make_dialog()
+        self.build_page(dialog)
+        dialog.input_field._text = "当前问题"
+        dialog.history_messages = [{"role": "user", "content": "上一轮问题"}]
+
+        with patch("ui.ai_chat.estimate_chat_context_tokens", return_value=512) as estimate:
+            dialog.refresh_context_pressure()
+
+        estimate.assert_called_once()
+        question, selected_payload, history = estimate.call_args.args
+        self.assertEqual("当前问题", question)
+        self.assertEqual(dialog.selected_analysis_payload(), selected_payload)
+        self.assertEqual([{"role": "user", "content": "上一轮问题"}], history)
+        self.assertIn("512", dialog.pressure_value_label.text)
 
     def test_sidebar_nav_buttons_share_capsule_style(self):
         dialog = self.make_dialog()
@@ -900,6 +948,21 @@ class TestAIChatDialogBehavior(unittest.TestCase):
             self.assertNotIn("▾", dialog.context_combo.currentText())
             self.assertGreater(dialog.context_combo.count(), 0)
             self.assertTrue(dialog.context_reason_label.wordWrap())
+            self.assertEqual("深度思考", dialog.thinking_btn.text())
+            self.assertEqual("aiSidebarActionButton", dialog.refresh_btn.objectName())
+            self.assertFalse(dialog.thinking_btn.isChecked())
+            self.assertEqual(QSizePolicy.Expanding, dialog.refresh_btn.sizePolicy().horizontalPolicy())
+            self.assertEqual(QSizePolicy.Expanding, dialog.thinking_btn.sizePolicy().horizontalPolicy())
+            self.assertEqual(QSizePolicy.Fixed, dialog.refresh_btn.sizePolicy().verticalPolicy())
+            self.assertEqual(QSizePolicy.Fixed, dialog.thinking_btn.sizePolicy().verticalPolicy())
+            self.assertFalse(dialog.sidebar_footer.isAncestorOf(dialog.clear_btn))
+            self.assertTrue(dialog.chat_page.isAncestorOf(dialog.clear_btn))
+            self.assertEqual(CHAT_ACTION_BUTTON_WIDTH, dialog.clear_btn.minimumWidth())
+            self.assertEqual(dialog.send_btn.minimumWidth(), dialog.clear_btn.minimumWidth())
+            self.assertEqual(dialog.send_btn.maximumWidth(), dialog.clear_btn.maximumWidth())
+            dialog.show()
+            self.app.processEvents()
+            self.assertLessEqual(abs(dialog.refresh_btn.width() - dialog.thinking_btn.width()), 1)
         finally:
             dialog.close()
 
@@ -996,6 +1059,7 @@ class TestAIChatDialogBehavior(unittest.TestCase):
         self.assertFalse(dialog.model_combo.enabled)
         self.assertFalse(dialog.refresh_btn.enabled)
         self.assertFalse(dialog.clear_btn.enabled)
+        self.assertFalse(dialog.thinking_btn.enabled)
         self.assertFalse(dialog.chat_nav_btn.enabled)
         self.assertFalse(dialog.table_nav_buttons["base_info"].enabled)
         self.assertFalse(page.core_btn.isEnabled())
@@ -1017,6 +1081,7 @@ class TestAIChatDialogBehavior(unittest.TestCase):
         self.assertFalse(dialog.model_combo.enabled)
         self.assertFalse(dialog.refresh_btn.enabled)
         self.assertFalse(dialog.clear_btn.enabled)
+        self.assertFalse(dialog.thinking_btn.enabled)
         self.assertFalse(dialog.chat_nav_btn.enabled)
         self.assertFalse(dialog.table_nav_buttons["base_info"].enabled)
         self.assertFalse(page.core_btn.isEnabled())
@@ -1199,7 +1264,7 @@ class AIChatDirectModelTests(unittest.TestCase):
 
     def test_ai_worker_passes_auto_context_to_direct_model(self):
         history = [{"role": "user", "content": "上一轮问题"}]
-        worker = AIWorker("继续分析", payload(), "qwen2:latest", 8192, history, analysis_data_json='{"tables":[]}')
+        worker = AIWorker("继续分析", payload(), "qwen2:latest", 8192, history, analysis_data_json='{"tables":[]}', think=True)
         deltas = []
         worker.delta.connect(deltas.append)
 
@@ -1214,6 +1279,7 @@ class AIChatDirectModelTests(unittest.TestCase):
         self.assertEqual(8192, args[3])
         self.assertEqual(history, kwargs["history_messages"])
         self.assertEqual('{"tables":[]}', kwargs["analysis_data_json"])
+        self.assertTrue(kwargs["think"])
         self.assertEqual([], deltas)
 
     def test_ai_worker_emits_streaming_delta_and_final_answer(self):
@@ -1224,14 +1290,14 @@ class AIChatDirectModelTests(unittest.TestCase):
         worker.finished.connect(finished.append)
 
         def fake_stream(*args, **kwargs):
-            kwargs["on_delta"]("A")
-            kwargs["on_delta"]("B")
+            kwargs["on_delta"]({"kind": "answer", "text": "A"})
+            kwargs["on_delta"]({"kind": "answer", "text": "B"})
             return "AB"
 
         with patch("ui.ai_chat.ask_model_stream", side_effect=fake_stream):
             worker.run()
 
-        self.assertEqual(["A", "B"], deltas)
+        self.assertEqual([{"kind": "answer", "text": "A"}, {"kind": "answer", "text": "B"}], deltas)
         self.assertEqual(["AB"], finished)
 
     def test_ai_worker_context_errors_fail_without_auto_retry(self):
@@ -1304,6 +1370,40 @@ class AIChatDirectModelTests(unittest.TestCase):
         )
         self.assertFalse(dialog._stream_render_pending)
 
+    def test_structured_stream_delta_separates_thinking_and_answer(self):
+        dialog = self.make_chat_dialog_stub()
+        dialog.history_messages = [{"role": "user", "content": "上一轮问题"}]
+        dialog._pending_history_length = 1
+        dialog.history_messages.append({"role": "user", "content": "本轮问题"})
+        dialog.is_inference_running = True
+        AIChatDialog.append_message(dialog, "user", "本轮问题")
+
+        AIChatDialog.handle_stream_delta(dialog, {"kind": "thinking", "text": "先检查字段"})
+        AIChatDialog.handle_stream_delta(dialog, {"kind": "answer", "text": "正式结论"})
+
+        message = dialog._chat_display_messages[1]
+        self.assertEqual("先检查字段", message["thinking"])
+        self.assertEqual("正式结论", message["content"])
+        self.assertEqual("AI 正在生成正式回答...", dialog.status_label.text)
+
+        AIChatDialog._flush_stream_render(dialog)
+        rendered = "\n".join(dialog.chat_history.items)
+        self.assertIn("深度思考", rendered)
+        self.assertIn("正式回答", rendered)
+        self.assertIn("thinking-section", rendered)
+        self.assertIn("answer-section", rendered)
+
+        AIChatDialog.handle_response(dialog, "正式结论")
+
+        self.assertEqual(
+            [
+                {"role": "user", "content": "上一轮问题"},
+                {"role": "user", "content": "本轮问题"},
+                {"role": "assistant", "content": "正式结论"},
+            ],
+            dialog.history_messages,
+        )
+
     def test_user_message_renders_as_right_blue_bubble(self):
         rendered = render_message_html("user", "<script>alert(1)</script>")
 
@@ -1331,6 +1431,16 @@ class AIChatDirectModelTests(unittest.TestCase):
         self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", rendered)
         self.assertNotIn("<script>alert(1)</script>", rendered)
         self.assertIn("<strong>bold</strong>", rendered)
+
+    def test_ai_message_renders_thinking_and_answer_as_distinct_sections(self):
+        rendered = render_message_html("assistant", "正式 **回答**", thinking="先分析字段")
+
+        self.assertIn("深度思考", rendered)
+        self.assertIn("正式回答", rendered)
+        self.assertIn("thinking-section", rendered)
+        self.assertIn("answer-section", rendered)
+        self.assertIn("先分析字段", rendered)
+        self.assertIn("<strong>回答</strong>", rendered)
 
     def test_error_message_renders_as_left_red_bubble(self):
         rendered = render_message_html("assistant", "network failed", is_error=True)
@@ -1751,6 +1861,7 @@ class AIChatDirectModelTests(unittest.TestCase):
         prompt_text = "\n".join(message["content"] for message in body["messages"])
         self.assertEqual("qwen2:latest", body["model"])
         self.assertEqual({"num_ctx": 8192}, body["options"])
+        self.assertNotIn("think", body)
         self.assertIn('"sequence":1', prompt_text)
         self.assertIn('"name":"张三"', prompt_text)
         self.assertIn('"department":"研发部"', prompt_text)
@@ -1777,6 +1888,13 @@ class AIChatDirectModelTests(unittest.TestCase):
         self.assertEqual(history[0], messages[1])
         self.assertEqual(history[1], messages[2])
 
+    def test_ask_model_posts_thinking_flag_when_enabled(self):
+        with patch("services.ai_direct.requests.post", return_value=FakeResponse("正式分析结果")) as post:
+            answer = ask_model("按部门分析", payload(), "qwen2:latest", timeout=5, think=True)
+
+        self.assertEqual("正式分析结果", answer)
+        self.assertTrue(post.call_args.kwargs["json"]["think"])
+
     def test_ask_model_requires_model_name(self):
         with self.assertRaises(ValueError):
             ask_model("问题", payload(), "", n_ctx=4096)
@@ -1791,6 +1909,7 @@ class AIChatDirectModelTests(unittest.TestCase):
         dialog.send_btn = FakeButton()
         dialog.refresh_btn = FakeButton()
         dialog.clear_btn = FakeButton()
+        dialog.thinking_btn = FakeButton("深度思考")
         dialog.chat_history = FakeHistory()
         dialog.history_messages = []
         dialog.is_inference_running = False
@@ -1837,6 +1956,7 @@ class AIChatDirectModelTests(unittest.TestCase):
     def test_start_inference_uses_user_selected_context(self):
         dialog = self.make_chat_dialog_stub()
         dialog.current_context_n_ctx = 8192
+        dialog.thinking_btn.setChecked(True)
 
         class FakeThread:
             def __init__(self, *_args):
@@ -1860,6 +1980,7 @@ class AIChatDirectModelTests(unittest.TestCase):
 
         self.assertIsNotNone(dialog.worker)
         self.assertEqual(8192, dialog.worker.n_ctx)
+        self.assertTrue(dialog.worker.think)
         self.assertIsNotNone(dialog.worker.analysis_data_json)
         self.assertTrue(dialog.worker_thread.start_called)
 
@@ -1949,16 +2070,95 @@ class AIChatDirectModelTests(unittest.TestCase):
                 timeout=5,
                 on_delta=deltas.append,
                 analysis_data_json='{"tables":[]}',
+                think=False,
             )
 
         self.assertEqual("AB", answer)
-        self.assertEqual(["A", "B"], deltas)
+        self.assertEqual(
+            [{"kind": "answer", "text": "A"}, {"kind": "answer", "text": "B"}],
+            deltas,
+        )
         body = post.call_args.kwargs["json"]
         self.assertEqual("qwen2:latest", body["model"])
         self.assertTrue(body["stream"])
         self.assertEqual({"num_ctx": 8192}, body["options"])
+        self.assertFalse(body["think"])
         self.assertTrue(post.call_args.kwargs["stream"])
         self.assertTrue(response.closed)
+
+    def test_ask_model_stream_emits_thinking_separately_from_answer(self):
+        lines = [
+            json.dumps({"message": {"thinking": "分析字段"}, "done": False}, ensure_ascii=False),
+            json.dumps({"message": {"content": "正式回答"}, "done": False}, ensure_ascii=False),
+            json.dumps({"done": True}, ensure_ascii=False),
+        ]
+        response = FakeStreamingResponse(lines)
+        deltas = []
+
+        with patch("services.ai_direct.requests.post", return_value=response):
+            answer = ask_model_stream(
+                "按部门分析",
+                payload(),
+                "qwen3:latest",
+                timeout=5,
+                on_delta=deltas.append,
+                analysis_data_json='{"tables":[]}',
+                think=True,
+            )
+
+        self.assertEqual("正式回答", answer)
+        self.assertEqual(
+            [
+                {"kind": "thinking", "text": "分析字段"},
+                {"kind": "answer", "text": "正式回答"},
+            ],
+            deltas,
+        )
+        self.assertTrue(response.closed)
+
+    def test_ask_model_stream_returns_empty_answer_for_thinking_only_chunks(self):
+        response = FakeStreamingResponse(
+            [
+                json.dumps({"message": {"thinking": "只有思考"}, "done": False}, ensure_ascii=False),
+                json.dumps({"done": True}, ensure_ascii=False),
+            ]
+        )
+        deltas = []
+
+        with patch("services.ai_direct.requests.post", return_value=response):
+            answer = ask_model_stream(
+                "按部门分析",
+                payload(),
+                "qwen3:latest",
+                timeout=5,
+                on_delta=deltas.append,
+                analysis_data_json='{"tables":[]}',
+                think=True,
+            )
+
+        self.assertEqual("", answer)
+        self.assertEqual([{"kind": "thinking", "text": "只有思考"}], deltas)
+
+    def test_ask_model_stream_treats_legacy_response_as_answer(self):
+        response = FakeStreamingResponse(
+            [
+                json.dumps({"response": "legacy", "done": False}, ensure_ascii=False),
+                json.dumps({"done": True}, ensure_ascii=False),
+            ]
+        )
+        deltas = []
+
+        with patch("services.ai_direct.requests.post", return_value=response):
+            answer = ask_model_stream(
+                "按部门分析",
+                payload(),
+                "legacy:latest",
+                timeout=5,
+                on_delta=deltas.append,
+            )
+
+        self.assertEqual("legacy", answer)
+        self.assertEqual([{"kind": "answer", "text": "legacy"}], deltas)
 
     def test_ask_model_stream_raises_chunk_error(self):
         response = FakeStreamingResponse([json.dumps({"error": "boom"}, ensure_ascii=False)])
