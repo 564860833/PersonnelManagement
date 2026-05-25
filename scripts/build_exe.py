@@ -58,7 +58,7 @@ def remove_tree(path: Path, display_name: str):
 def clean_old_builds():
     print("Cleaning old build outputs...")
     remove_tree(PROJECT_ROOT / "build", "build directory")
-    remove_tree(DIST_DIR, "dist directory")
+    remove_tree(APP_DIST_DIR, "app dist directory")
     remove_tree(PROJECT_ROOT / "__pycache__", "__pycache__ directory")
     print("Clean complete.\n")
 
